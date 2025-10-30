@@ -12,16 +12,26 @@ import Properties from "@/pages/Properties";
 import Tenants from "@/pages/Tenants";
 import Maintenance from "@/pages/Maintenance";
 import Financials from "@/pages/Financials";
+import Masterlist from "@/pages/Masterlist";
+import Communications from "@/pages/Communications";
+import Transactions from "@/pages/Transactions";
+import Reports from "@/pages/Reports";
+import Documentation from "@/pages/Documentation";
 import NotFound from "@/pages/not-found";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
+      <Route path="/masterlist" component={Masterlist} />
       <Route path="/properties" component={Properties} />
       <Route path="/tenants" component={Tenants} />
       <Route path="/maintenance" component={Maintenance} />
+      <Route path="/communications" component={Communications} />
       <Route path="/financials" component={Financials} />
+      <Route path="/transactions" component={Transactions} />
+      <Route path="/reports" component={Reports} />
+      <Route path="/documentation" component={Documentation} />
       <Route component={NotFound} />
     </Switch>
   );

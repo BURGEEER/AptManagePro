@@ -1,0 +1,60 @@
+PART OF THE SYSTEM TAB
+REMARKS
+Dashboard
+Announcements
+Preventive Maintenance Service of Equipment
+Power Interruptions
+On-going major repairs in Property
+Add Calendar, Date & Time
+Record date sa pag release ng SOA
+Communications
+Advisory and Accomplishments 
+Support services for inquiries between admin and unit owners
+Bug detection for owner to admin, admin to IT team
+May feature dito na kapag nagtanong yung owner ng monthly bill nya is dapat pwede isend yung mismong SOA nya sa convo ng portal nya 
+Masterlist
+Full owner information and isama sa info nila if may nakasublease/pinapa-rent or kung DEEMED unit
+Unit numbers/letters
+Parking slots (if may parking slot ang owner)  
+Maglagay ng notification part para sa bagong edit/update na info from unit owners
+Maintenance
+Kakayahan ng admin mag file ng unit concern
+Mag automate na gagawa ng unit concern sheet form, dapat may kakayahan din iedit ni admin yung template ng concern sheet pero maglalagay padin tayo ng sample template
+Filter ng mga kind of unit concerns
+Civil (Painting works, cracks, Water Heaters
+Plumbing (Fixtures like faucets, floor drains, water closet, faucets)
+Water Leak
+Electrical (sockets, breakers etc.)
+Flooring
+Intercom System
+Maglagay ng notification part para sa bagong file na unit concern
+Water and Electric Consumption readings
+Financials
+Filter out ang monthly and annually ng mga unit owners/tenants
+Makikita yung mga owner na bayad or hindi for that month
+Makita yung mga utang ng owners kung magkano and kung ilang months na
+If may unit na 3 months and more na hindi nakakabayad, mapupunta na sila sa delinquet accounts section 
+Filter out din ang financial status ng units owners/tenants & common areas
+Filter out din yung financial record ng mga payment for contractors (part 2 video)- admin only bayarin
+Account Payables (dapat may record kung sino yung mga gumalaw, kumbaga dapat may logbook)
+Transactions
+Request for Payment
+
+
+Reports
+Data from all
+Automate yung following reports
+Engineering Reports
+Billing Report (Separate ang mga Delinguet accounts
+SOA 
+
+
+Documentation
+Storing of data for different kind of sections in the property
+Projects
+Contractors
+DENR
+
+
+
+

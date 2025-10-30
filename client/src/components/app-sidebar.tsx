@@ -9,6 +9,10 @@ import {
   Briefcase,
   BarChart3,
   Settings,
+  ScrollText,
+  Archive,
+  Receipt,
+  UserCheck,
 } from "lucide-react";
 import {
   Sidebar,
@@ -22,12 +26,20 @@ import {
   SidebarHeader,
 } from "@/components/ui/sidebar";
 import { useLocation } from "wouter";
+import { Badge } from "@/components/ui/badge";
 
 const menuItems = [
   {
     title: "Dashboard",
     url: "/",
     icon: Home,
+    notification: 3, // Active announcements
+  },
+  {
+    title: "Masterlist",
+    url: "/masterlist",
+    icon: UserCheck,
+    notification: 2, // New updates
   },
   {
     title: "Properties",
@@ -43,31 +55,39 @@ const menuItems = [
     title: "Maintenance",
     url: "/maintenance",
     icon: Wrench,
-  },
-  {
-    title: "Financials",
-    url: "/financials",
-    icon: DollarSign,
-  },
-  {
-    title: "Documents",
-    url: "/documents",
-    icon: FileText,
+    notification: 5, // Open requests
   },
   {
     title: "Communications",
     url: "/communications",
     icon: MessageSquare,
+    notification: 8, // Unread messages
   },
   {
-    title: "Vendors",
-    url: "/vendors",
-    icon: Briefcase,
+    title: "Financials",
+    url: "/financials",
+    icon: DollarSign,
+    notification: 4, // Delinquent accounts
+  },
+  {
+    title: "Transactions",
+    url: "/transactions",
+    icon: Receipt,
   },
   {
     title: "Reports",
     url: "/reports",
     icon: BarChart3,
+  },
+  {
+    title: "Documentation",
+    url: "/documentation",
+    icon: Archive,
+  },
+  {
+    title: "Vendors",
+    url: "/vendors",
+    icon: Briefcase,
   },
 ];
 
@@ -97,6 +117,11 @@ export function AppSidebar() {
                     <a href={item.url}>
                       <item.icon className="h-4 w-4" />
                       <span>{item.title}</span>
+                      {item.notification && (
+                        <Badge className="ml-auto h-5 px-1.5 text-xs" variant="secondary">
+                          {item.notification}
+                        </Badge>
+                      )}
                     </a>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
