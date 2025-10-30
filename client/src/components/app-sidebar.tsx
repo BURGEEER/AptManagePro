@@ -13,6 +13,7 @@ import {
   Archive,
   Receipt,
   UserCheck,
+  ShieldCheck,
 } from "lucide-react";
 import {
   Sidebar,
@@ -27,72 +28,104 @@ import {
 } from "@/components/ui/sidebar";
 import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
+import { useQuery } from "@tanstack/react-query";
+import type { User } from "@shared/schema";
 
-const menuItems = [
-  {
-    title: "Dashboard",
-    url: "/",
-    icon: Home,
-    notification: 3, // Active announcements
-  },
-  {
-    title: "Masterlist",
-    url: "/masterlist",
-    icon: UserCheck,
-    notification: 2, // New updates
-  },
-  {
-    title: "Properties",
-    url: "/properties",
-    icon: Building2,
-  },
-  {
-    title: "Tenants",
-    url: "/tenants",
-    icon: Users,
-  },
-  {
-    title: "Maintenance",
-    url: "/maintenance",
-    icon: Wrench,
-    notification: 5, // Open requests
-  },
-  {
-    title: "Communications",
-    url: "/communications",
-    icon: MessageSquare,
-    notification: 8, // Unread messages
-  },
-  {
-    title: "Financials",
-    url: "/financials",
-    icon: DollarSign,
-    notification: 4, // Delinquent accounts
-  },
-  {
-    title: "Transactions",
-    url: "/transactions",
-    icon: Receipt,
-  },
-  {
-    title: "Reports",
-    url: "/reports",
-    icon: BarChart3,
-  },
-  {
-    title: "Documentation",
-    url: "/documentation",
-    icon: Archive,
-  },
-  {
-    title: "Vendors",
-    url: "/vendors",
-    icon: Briefcase,
-  },
-];
+const getAllMenuItems = (userRole?: string) => {
+  const baseItems = [
+    {
+      title: "Dashboard",
+      url: "/",
+      icon: Home,
+      notification: 3,
+      roles: ['IT', 'ADMIN', 'TENANT'],
+    },
+    {
+      title: "Users",
+      url: "/users",
+      icon: ShieldCheck,
+      roles: ['IT', 'ADMIN'],
+    },
+    {
+      title: "Masterlist",
+      url: "/masterlist",
+      icon: UserCheck,
+      notification: 2,
+      roles: ['IT', 'ADMIN'],
+    },
+    {
+      title: "Properties",
+      url: "/properties",
+      icon: Building2,
+      roles: ['IT', 'ADMIN'],
+    },
+    {
+      title: "Tenants",
+      url: "/tenants",
+      icon: Users,
+      roles: ['IT', 'ADMIN'],
+    },
+    {
+      title: "Maintenance",
+      url: "/maintenance",
+      icon: Wrench,
+      notification: 5,
+      roles: ['IT', 'ADMIN', 'TENANT'],
+    },
+    {
+      title: "Communications",
+      url: "/communications",
+      icon: MessageSquare,
+      notification: 8,
+      roles: ['IT', 'ADMIN', 'TENANT'],
+    },
+    {
+      title: "Financials",
+      url: "/financials",
+      icon: DollarSign,
+      notification: 4,
+      roles: ['IT', 'ADMIN'],
+    },
+    {
+      title: "Transactions",
+      url: "/transactions",
+      icon: Receipt,
+      roles: ['IT', 'ADMIN'],
+    },
+    {
+      title: "Reports",
+      url: "/reports",
+      icon: BarChart3,
+      roles: ['IT', 'ADMIN'],
+    },
+    {
+      title: "Documentation",
+      url: "/documentation",
+      icon: Archive,
+      roles: ['IT', 'ADMIN'],
+    },
+    {
+      title: "Vendors",
+      url: "/vendors",
+      icon: Briefcase,
+      roles: ['IT', 'ADMIN'],
+    },
+  ];
+
+  // Filter items based on user role
+  if (!userRole) return [];
+  return baseItems.filter(item => item.roles.includes(userRole));
+};
 
 export function AppSidebar() {
   const [location] = useLocation();
+  
+  // Get current user to determine role
+  const { data: currentUser } = useQuery<User>({
+    queryKey: ['/api/auth/me'],
+  });
+  
+  const menuItems = getAllMenuItems(currentUser?.role);
 
   return (
     <Sidebar>

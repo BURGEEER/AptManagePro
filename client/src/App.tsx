@@ -18,6 +18,7 @@ import Communications from "@/pages/Communications";
 import Transactions from "@/pages/Transactions";
 import Reports from "@/pages/Reports";
 import Documentation from "@/pages/Documentation";
+import Users from "@/pages/Users";
 import Login from "@/pages/Login";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
@@ -107,6 +108,7 @@ function Router() {
     <Switch>
       <Route path="/" component={Dashboard} />
       <Route path="/dashboard" component={Dashboard} />
+      <Route path="/users" component={Users} />
       <Route path="/masterlist" component={Masterlist} />
       <Route path="/properties" component={Properties} />
       <Route path="/tenants" component={Tenants} />
