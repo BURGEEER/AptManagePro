@@ -370,15 +370,14 @@ export default function UsersPage() {
                     name="propertyId"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Property Assignment</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value || ""}>
+                        <FormLabel>Property Assignment (Optional)</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value || undefined}>
                           <FormControl>
                             <SelectTrigger data-testid="select-property">
-                              <SelectValue placeholder="Select property" />
+                              <SelectValue placeholder="Select property (optional)" />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="">No property</SelectItem>
                             {properties.map((property) => (
                               <SelectItem key={property.id} value={property.id}>
                                 {property.name}
