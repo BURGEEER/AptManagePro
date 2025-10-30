@@ -3,7 +3,6 @@ import { createServer } from "http";
 import { setupRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import session from "express-session";
-import "./types/session";
 
 const app = express();
 
