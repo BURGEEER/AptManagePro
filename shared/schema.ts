@@ -54,6 +54,30 @@ export const insertOwnerSchema = createInsertSchema(owners).omit({ id: true });
 export type InsertOwner = z.infer<typeof insertOwnerSchema>;
 export type Owner = typeof owners.$inferSelect;
 
+// ============= Users (for Authentication) =============
+export const users = pgTable("users", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  username: text("username").notNull().unique(),
+  password: text("password").notNull(), // Hashed password
+  role: text("role").notNull(), // IT, ADMIN, TENANT
+  email: text("email"),
+  fullName: text("full_name"),
+  propertyId: uuid("property_id").references(() => properties.id), // For ADMIN and TENANT roles
+  ownerId: uuid("owner_id").references(() => owners.id), // Link to owner/tenant record
+  isActive: boolean("is_active").default(true),
+  lastLogin: timestamp("last_login"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  createdBy: uuid("created_by"),
+});
+
+export const insertUserSchema = createInsertSchema(users).omit({ 
+  id: true,
+  createdAt: true,
+  lastLogin: true
+});
+export type InsertUser = z.infer<typeof insertUserSchema>;
+export type User = typeof users.$inferSelect;
+
 // ============= Owner Units (Many-to-Many) =============
 export const ownerUnits = pgTable("owner_units", {
   id: uuid("id").defaultRandom().primaryKey(),

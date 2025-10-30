@@ -12,6 +12,7 @@ import {
   ownerUnits,
   parkingSlots,
   accountPayables,
+  users,
   type Property, type InsertProperty,
   type Unit, type InsertUnit,
   type Owner, type InsertOwner,
@@ -23,23 +24,58 @@ import {
   type UtilityReading, type InsertUtilityReading,
   type OwnerUnit, type InsertOwnerUnit,
   type ParkingSlot, type InsertParkingSlot,
-  type AccountPayable, type InsertAccountPayable
+  type AccountPayable, type InsertAccountPayable,
+  type User, type InsertUser
 } from "@shared/schema";
 import { eq, desc, and } from "drizzle-orm";
 import { IStorage } from "./storage";
+import * as bcrypt from "bcryptjs";
 
 export class PgStorage implements IStorage {
-  // User methods (stubbed for now - not using authentication yet)
-  async getUser(id: string): Promise<any> {
-    return undefined;
+  // User methods with proper authentication
+  async getUser(id: string): Promise<User | undefined> {
+    const [result] = await db.select().from(users).where(eq(users.id, id));
+    return result || undefined;
   }
 
-  async getUserByUsername(username: string): Promise<any> {
-    return undefined;
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    const [result] = await db.select().from(users).where(eq(users.username, username));
+    return result || undefined;
   }
 
-  async createUser(insertUser: any): Promise<any> {
-    return { id: "temp", username: insertUser.username };
+  async createUser(insertUser: InsertUser): Promise<User> {
+    // Hash password before saving
+    const hashedPassword = await bcrypt.hash(insertUser.password, 10);
+    const [result] = await db.insert(users).values({
+      ...insertUser,
+      password: hashedPassword
+    }).returning();
+    return result;
+  }
+
+  async updateUserLastLogin(id: string): Promise<void> {
+    await db.update(users).set({ lastLogin: new Date() }).where(eq(users.id, id));
+  }
+
+  async getAllUsers(): Promise<User[]> {
+    return db.select().from(users);
+  }
+
+  async getUsersByRole(role: string): Promise<User[]> {
+    return db.select().from(users).where(eq(users.role, role));
+  }
+
+  async updateUser(id: string, user: Partial<InsertUser>): Promise<User | null> {
+    // If password is being updated, hash it
+    if (user.password) {
+      user.password = await bcrypt.hash(user.password, 10);
+    }
+    const [result] = await db.update(users).set(user).where(eq(users.id, id)).returning();
+    return result || null;
+  }
+
+  async verifyPassword(hashedPassword: string, plainPassword: string): Promise<boolean> {
+    return bcrypt.compare(plainPassword, hashedPassword);
   }
 
   // Properties

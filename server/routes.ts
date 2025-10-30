@@ -1,14 +1,196 @@
 import express from "express";
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import { insertPropertySchema, insertUnitSchema, insertOwnerSchema, insertTenantSchema, 
   insertMaintenanceRequestSchema, insertTransactionSchema, insertCommunicationSchema, 
   insertAnnouncementSchema, insertUtilityReadingSchema, insertOwnerUnitSchema,
-  insertParkingSlotSchema, insertAccountPayableSchema } from "@shared/schema";
+  insertParkingSlotSchema, insertAccountPayableSchema, insertUserSchema } from "@shared/schema";
 import { PgStorage } from "./db-storage";
+import { z } from "zod";
 
 const storage = new PgStorage();
 
+// Authentication middleware
+export function requireAuth(req: Request, res: express.Response, next: express.NextFunction) {
+  if (!req.session?.userId) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+  next();
+}
+
+// Role-based access middleware
+export function requireRole(roles: string[]) {
+  return async (req: Request, res: express.Response, next: express.NextFunction) => {
+    if (!req.session?.userId) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    const user = await storage.getUser(req.session.userId);
+    if (!user || !roles.includes(user.role)) {
+      return res.status(403).json({ error: "Insufficient permissions" });
+    }
+    req.session.user = user;
+    next();
+  };
+}
+
 export function setupRoutes(app: Express) {
+  // ============= Authentication Routes =============
+  app.post("/api/auth/login", express.json(), async (req, res) => {
+    try {
+      const { username, password } = req.body;
+      const user = await storage.getUserByUsername(username);
+      
+      if (!user || !user.isActive) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+      
+      const isValid = await storage.verifyPassword(user.password, password);
+      if (!isValid) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+      
+      // Update last login
+      await storage.updateUserLastLogin(user.id);
+      
+      // Set session
+      req.session!.userId = user.id;
+      req.session!.role = user.role;
+      
+      // Return user without password
+      const { password: _, ...userWithoutPassword } = user;
+      res.json({ user: userWithoutPassword });
+    } catch (error) {
+      console.error("Login error:", error);
+      res.status(500).json({ error: "Login failed" });
+    }
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    req.session?.destroy((err) => {
+      if (err) {
+        return res.status(500).json({ error: "Failed to logout" });
+      }
+      res.json({ success: true });
+    });
+  });
+
+  app.get("/api/auth/me", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      const { password: _, ...userWithoutPassword } = user;
+      res.json(userWithoutPassword);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch user" });
+    }
+  });
+
+  // ============= User Management Routes (IT and Admin only) =============
+  app.post("/api/users", requireRole(["IT", "ADMIN"]), express.json(), async (req, res) => {
+    try {
+      const currentUser = req.session!.user;
+      
+      // Validate creation permissions
+      if (currentUser?.role === "ADMIN" && req.body.role !== "TENANT") {
+        return res.status(403).json({ error: "Admins can only create tenant accounts" });
+      }
+      if (currentUser?.role === "IT" && req.body.role === "IT") {
+        return res.status(403).json({ error: "IT accounts cannot be created via API" });
+      }
+      
+      const userData = {
+        ...req.body,
+        createdBy: currentUser?.id
+      };
+      
+      const parsed = insertUserSchema.parse(userData);
+      const user = await storage.createUser(parsed);
+      const { password: _, ...userWithoutPassword } = user;
+      res.status(201).json(userWithoutPassword);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ error: "Invalid user data", details: error.errors });
+      }
+      res.status(500).json({ error: "Failed to create user" });
+    }
+  });
+
+  app.get("/api/users", requireRole(["IT", "ADMIN"]), async (req, res) => {
+    try {
+      const currentUser = req.session!.user;
+      let users;
+      
+      if (currentUser?.role === "IT") {
+        users = await storage.getAllUsers();
+      } else if (currentUser?.role === "ADMIN") {
+        // Admins can only see users from their property
+        const allUsers = await storage.getAllUsers();
+        users = allUsers.filter(u => u.propertyId === currentUser.propertyId);
+      }
+      
+      // Remove passwords from response
+      const usersWithoutPasswords = users?.map(({ password: _, ...user }) => user) || [];
+      res.json(usersWithoutPasswords);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch users" });
+    }
+  });
+
+  app.patch("/api/users/:id", requireRole(["IT", "ADMIN"]), express.json(), async (req, res) => {
+    try {
+      const currentUser = req.session!.user;
+      const targetUser = await storage.getUser(req.params.id);
+      
+      if (!targetUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      // Permission checks
+      if (currentUser?.role === "ADMIN") {
+        if (targetUser.propertyId !== currentUser.propertyId || targetUser.role !== "TENANT") {
+          return res.status(403).json({ error: "Insufficient permissions" });
+        }
+      }
+      
+      const updatedUser = await storage.updateUser(req.params.id, req.body);
+      if (!updatedUser) {
+        return res.status(404).json({ error: "Failed to update user" });
+      }
+      
+      const { password: _, ...userWithoutPassword } = updatedUser;
+      res.json(userWithoutPassword);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update user" });
+    }
+  });
+  
+  app.delete("/api/users/:id", requireRole(["IT", "ADMIN"]), async (req, res) => {
+    try {
+      const currentUser = req.session!.user;
+      const targetUser = await storage.getUser(req.params.id);
+      
+      if (!targetUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      // Permission checks
+      if (currentUser?.role === "ADMIN" && 
+          (targetUser.propertyId !== currentUser.propertyId || targetUser.role !== "TENANT")) {
+        return res.status(403).json({ error: "Insufficient permissions" });
+      }
+      
+      // Deactivate instead of delete
+      await storage.updateUser(req.params.id, { isActive: false });
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to deactivate user" });
+    }
+  });
   // ============= Properties =============
   app.get("/api/properties", async (req, res) => {
     try {

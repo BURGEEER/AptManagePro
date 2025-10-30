@@ -2,8 +2,23 @@ import express, { type Request, Response, NextFunction } from "express";
 import { createServer } from "http";
 import { setupRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import session from "express-session";
+import "./types/session";
 
 const app = express();
+
+// Session configuration
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'propertyprof00fb94d2e2b3fc49d7cc24a8da19c9b0',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+  },
+}));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
