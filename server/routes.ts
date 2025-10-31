@@ -1,9 +1,14 @@
 import express from "express";
 import type { Express, Request } from "express";
-import { insertPropertySchema, insertUnitSchema, insertOwnerSchema, insertTenantSchema, 
+import { 
+  insertPropertySchema, insertUnitSchema, insertOwnerSchema, insertTenantSchema, 
   insertMaintenanceRequestSchema, insertTransactionSchema, insertCommunicationSchema, 
   insertAnnouncementSchema, insertUtilityReadingSchema, insertOwnerUnitSchema,
-  insertParkingSlotSchema, insertAccountPayableSchema, insertUserSchema } from "@shared/schema";
+  insertParkingSlotSchema, insertAccountPayableSchema, insertUserSchema,
+  type Property, type Unit, type Owner, type Tenant, type MaintenanceRequest, 
+  type Transaction, type Communication, type Announcement, type UtilityReading,
+  type OwnerUnit, type ParkingSlot, type AccountPayable, type User
+} from "@shared/schema";
 import { PgStorage } from "./db-storage";
 import { z } from "zod";
 
@@ -204,9 +209,35 @@ export function setupRoutes(app: Express) {
     }
   });
   // ============= Properties =============
-  app.get("/api/properties", async (req, res) => {
+  app.get("/api/properties", requireAuth, async (req, res) => {
     try {
-      const properties = await storage.getAllProperties();
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      let properties: Property[];
+      
+      // IT sees all properties
+      if (user.role === "IT") {
+        properties = await storage.getAllProperties();
+      } 
+      // Admin sees only their assigned property
+      else if (user.role === "ADMIN" && user.propertyId) {
+        const property = await storage.getPropertyById(user.propertyId);
+        properties = property ? [property] : [];
+      }
+      // Tenant sees only their property
+      else if (user.role === "TENANT" && user.propertyId) {
+        const property = await storage.getPropertyById(user.propertyId);
+        properties = property ? [property] : [];
+      }
+      else {
+        properties = [];
+      }
+      
       res.json(properties);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch properties" });
@@ -225,7 +256,8 @@ export function setupRoutes(app: Express) {
     }
   });
 
-  app.post("/api/properties", express.json(), async (req, res) => {
+  // Only IT can create properties
+  app.post("/api/properties", requireRole(["IT"]), express.json(), async (req, res) => {
     try {
       const parsed = insertPropertySchema.parse(req.body);
       const property = await storage.createProperty(parsed);
@@ -238,7 +270,8 @@ export function setupRoutes(app: Express) {
     }
   });
 
-  app.patch("/api/properties/:id", express.json(), async (req, res) => {
+  // Only IT can update properties (Admins can only manage within their property)
+  app.patch("/api/properties/:id", requireRole(["IT"]), express.json(), async (req, res) => {
     try {
       const property = await storage.updateProperty(req.params.id, req.body);
       if (!property) {
@@ -250,7 +283,8 @@ export function setupRoutes(app: Express) {
     }
   });
 
-  app.delete("/api/properties/:id", async (req, res) => {
+  // Only IT can delete properties
+  app.delete("/api/properties/:id", requireRole(["IT"]), async (req, res) => {
     try {
       const success = await storage.deleteProperty(req.params.id);
       if (!success) {
@@ -263,12 +297,47 @@ export function setupRoutes(app: Express) {
   });
 
   // ============= Units =============
-  app.get("/api/units", async (req, res) => {
+  app.get("/api/units", requireAuth, async (req, res) => {
     try {
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
       const { propertyId } = req.query;
-      const units = propertyId 
-        ? await storage.getUnitsByPropertyId(propertyId as string)
-        : await storage.getAllUnits();
+      let units: Unit[];
+      
+      // IT sees all units
+      if (user.role === "IT") {
+        units = propertyId 
+          ? await storage.getUnitsByPropertyId(propertyId as string)
+          : await storage.getAllUnits();
+      }
+      // Admin sees only units from their property
+      else if (user.role === "ADMIN" && user.propertyId) {
+        // Allow filtering within their property if propertyId matches
+        if (propertyId && propertyId !== user.propertyId) {
+          return res.status(403).json({ error: "Access denied to this property" });
+        }
+        units = await storage.getUnitsByPropertyId(user.propertyId);
+      }
+      // Tenant sees only their assigned unit
+      else if (user.role === "TENANT" && user.ownerId) {
+        // Get tenant's unit through their tenant record
+        const tenants = await storage.getTenantsByOwnerId(user.ownerId);
+        if (tenants.length > 0 && tenants[0].unitId) {
+          const unit = await storage.getUnitById(tenants[0].unitId);
+          units = unit ? [unit] : [];
+        } else {
+          units = [];
+        }
+      }
+      else {
+        units = [];
+      }
+      
       res.json(units);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch units" });
@@ -287,8 +356,17 @@ export function setupRoutes(app: Express) {
     }
   });
 
-  app.post("/api/units", express.json(), async (req, res) => {
+  app.post("/api/units", requireRole(["IT", "ADMIN"]), express.json(), async (req, res) => {
     try {
+      const currentUser = req.session!.user;
+      
+      // Admins can only create units in their property
+      if (currentUser?.role === "ADMIN") {
+        if (!currentUser.propertyId || req.body.propertyId !== currentUser.propertyId) {
+          return res.status(403).json({ error: "Can only create units in your assigned property" });
+        }
+      }
+      
       const parsed = insertUnitSchema.parse(req.body);
       const unit = await storage.createUnit(parsed);
       res.status(201).json(unit);
@@ -300,8 +378,18 @@ export function setupRoutes(app: Express) {
     }
   });
 
-  app.patch("/api/units/:id", express.json(), async (req, res) => {
+  app.patch("/api/units/:id", requireRole(["IT", "ADMIN"]), express.json(), async (req, res) => {
     try {
+      const currentUser = req.session!.user;
+      
+      // Check if admin can update this unit
+      if (currentUser?.role === "ADMIN") {
+        const unit = await storage.getUnitById(req.params.id);
+        if (!unit || unit.propertyId !== currentUser.propertyId) {
+          return res.status(403).json({ error: "Can only update units in your assigned property" });
+        }
+      }
+      
       const unit = await storage.updateUnit(req.params.id, req.body);
       if (!unit) {
         return res.status(404).json({ error: "Unit not found" });
@@ -312,8 +400,18 @@ export function setupRoutes(app: Express) {
     }
   });
 
-  app.delete("/api/units/:id", async (req, res) => {
+  app.delete("/api/units/:id", requireRole(["IT", "ADMIN"]), async (req, res) => {
     try {
+      const currentUser = req.session!.user;
+      
+      // Check if admin can delete this unit
+      if (currentUser?.role === "ADMIN") {
+        const unit = await storage.getUnitById(req.params.id);
+        if (!unit || unit.propertyId !== currentUser.propertyId) {
+          return res.status(403).json({ error: "Can only delete units in your assigned property" });
+        }
+      }
+      
       const success = await storage.deleteUnit(req.params.id);
       if (!success) {
         return res.status(404).json({ error: "Unit not found" });
@@ -325,9 +423,50 @@ export function setupRoutes(app: Express) {
   });
 
   // ============= Owners =============
-  app.get("/api/owners", async (req, res) => {
+  app.get("/api/owners", requireAuth, async (req, res) => {
     try {
-      const owners = await storage.getAllOwners();
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      // Tenants should not access owners list
+      if (user.role === "TENANT") {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      let owners: Owner[];
+      
+      // IT sees all owners
+      if (user.role === "IT") {
+        owners = await storage.getAllOwners();
+      }
+      // Admin sees only owners from their property
+      else if (user.role === "ADMIN" && user.propertyId) {
+        // Get all units in the property
+        const units = await storage.getUnitsByPropertyId(user.propertyId);
+        const unitIds = units.map(u => u.id);
+        
+        // Get all owner-unit relationships for these units
+        const ownerUnits = [];
+        for (const unitId of unitIds) {
+          const ous = await storage.getOwnerUnitsByUnitId(unitId);
+          ownerUnits.push(...ous);
+        }
+        
+        // Get unique owner IDs
+        const ownerIds = Array.from(new Set(ownerUnits.map(ou => ou.ownerId)));
+        
+        // Get all owners
+        const allOwners = await storage.getAllOwners();
+        owners = allOwners.filter(owner => ownerIds.includes(owner.id));
+      }
+      else {
+        owners = [];
+      }
+      
       res.json(owners);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch owners" });
@@ -346,7 +485,7 @@ export function setupRoutes(app: Express) {
     }
   });
 
-  app.post("/api/owners", express.json(), async (req, res) => {
+  app.post("/api/owners", requireRole(["IT", "ADMIN"]), express.json(), async (req, res) => {
     try {
       const parsed = insertOwnerSchema.parse(req.body);
       const owner = await storage.createOwner(parsed);
@@ -359,8 +498,22 @@ export function setupRoutes(app: Express) {
     }
   });
 
-  app.patch("/api/owners/:id", express.json(), async (req, res) => {
+  app.patch("/api/owners/:id", requireRole(["IT", "ADMIN"]), express.json(), async (req, res) => {
     try {
+      const currentUser = req.session!.user;
+      
+      // Check if admin can update this owner
+      if (currentUser?.role === "ADMIN") {
+        // Get owner's units to check if they belong to admin's property
+        const ownerUnits = await storage.getOwnerUnitsByOwnerId(req.params.id);
+        if (ownerUnits.length > 0) {
+          const unit = await storage.getUnitById(ownerUnits[0].unitId);
+          if (!unit || unit.propertyId !== currentUser.propertyId) {
+            return res.status(403).json({ error: "Can only update owners in your assigned property" });
+          }
+        }
+      }
+      
       const owner = await storage.updateOwner(req.params.id, req.body);
       if (!owner) {
         return res.status(404).json({ error: "Owner not found" });
@@ -418,12 +571,51 @@ export function setupRoutes(app: Express) {
   });
 
   // ============= Tenants =============
-  app.get("/api/tenants", async (req, res) => {
+  app.get("/api/tenants", requireAuth, async (req, res) => {
     try {
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      // Tenants should not access tenants list
+      if (user.role === "TENANT") {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
       const { unitId } = req.query;
-      const tenants = unitId 
-        ? await storage.getTenantsByUnitId(unitId as string)
-        : await storage.getAllTenants();
+      let tenants: Tenant[];
+      
+      // IT sees all tenants
+      if (user.role === "IT") {
+        tenants = unitId 
+          ? await storage.getTenantsByUnitId(unitId as string)
+          : await storage.getAllTenants();
+      }
+      // Admin sees only tenants from their property
+      else if (user.role === "ADMIN" && user.propertyId) {
+        // Get all units in the property
+        const units = await storage.getUnitsByPropertyId(user.propertyId);
+        const unitIds = units.map(u => u.id);
+        
+        if (unitId) {
+          // Check if requested unitId belongs to admin's property
+          if (!unitIds.includes(unitId as string)) {
+            return res.status(403).json({ error: "Access denied to this unit" });
+          }
+          tenants = await storage.getTenantsByUnitId(unitId as string);
+        } else {
+          // Get all tenants from all units in the property
+          const allTenants = await storage.getAllTenants();
+          tenants = allTenants.filter(tenant => unitIds.includes(tenant.unitId));
+        }
+      }
+      else {
+        tenants = [];
+      }
+      
       res.json(tenants);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch tenants" });
@@ -442,8 +634,18 @@ export function setupRoutes(app: Express) {
     }
   });
 
-  app.post("/api/tenants", express.json(), async (req, res) => {
+  app.post("/api/tenants", requireRole(["IT", "ADMIN"]), express.json(), async (req, res) => {
     try {
+      const currentUser = req.session!.user;
+      
+      // Admins can only create tenants in their property
+      if (currentUser?.role === "ADMIN") {
+        const unit = await storage.getUnitById(req.body.unitId);
+        if (!unit || unit.propertyId !== currentUser.propertyId) {
+          return res.status(403).json({ error: "Can only create tenants in your assigned property" });
+        }
+      }
+      
       const parsed = insertTenantSchema.parse(req.body);
       const tenant = await storage.createTenant(parsed);
       res.status(201).json(tenant);
@@ -455,8 +657,22 @@ export function setupRoutes(app: Express) {
     }
   });
 
-  app.patch("/api/tenants/:id", express.json(), async (req, res) => {
+  app.patch("/api/tenants/:id", requireRole(["IT", "ADMIN"]), express.json(), async (req, res) => {
     try {
+      const currentUser = req.session!.user;
+      
+      // Check if admin can update this tenant
+      if (currentUser?.role === "ADMIN") {
+        const tenant = await storage.getTenantById(req.params.id);
+        if (!tenant) {
+          return res.status(404).json({ error: "Tenant not found" });
+        }
+        const unit = await storage.getUnitById(tenant.unitId);
+        if (!unit || unit.propertyId !== currentUser.propertyId) {
+          return res.status(403).json({ error: "Can only update tenants in your assigned property" });
+        }
+      }
+      
       const tenant = await storage.updateTenant(req.params.id, req.body);
       if (!tenant) {
         return res.status(404).json({ error: "Tenant not found" });
@@ -468,17 +684,69 @@ export function setupRoutes(app: Express) {
   });
 
   // ============= Maintenance Requests =============
-  app.get("/api/maintenance-requests", async (req, res) => {
+  app.get("/api/maintenance-requests", requireAuth, async (req, res) => {
     try {
-      const { status, unitId } = req.query;
-      let requests;
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
       
-      if (status) {
-        requests = await storage.getMaintenanceRequestsByStatus(status as string);
-      } else if (unitId) {
-        requests = await storage.getMaintenanceRequestsByUnitId(unitId as string);
-      } else {
-        requests = await storage.getAllMaintenanceRequests();
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      const { status, unitId } = req.query;
+      let requests: MaintenanceRequest[];
+      
+      // IT sees all requests
+      if (user.role === "IT") {
+        if (status) {
+          requests = await storage.getMaintenanceRequestsByStatus(status as string);
+        } else if (unitId) {
+          requests = await storage.getMaintenanceRequestsByUnitId(unitId as string);
+        } else {
+          requests = await storage.getAllMaintenanceRequests();
+        }
+      }
+      // Admin sees only requests from their property
+      else if (user.role === "ADMIN" && user.propertyId) {
+        // Get all units in the property
+        const units = await storage.getUnitsByPropertyId(user.propertyId);
+        const unitIds = units.map(u => u.id);
+        
+        let allRequests;
+        if (status) {
+          allRequests = await storage.getMaintenanceRequestsByStatus(status as string);
+        } else if (unitId) {
+          // Check if requested unitId belongs to admin's property
+          if (!unitIds.includes(unitId as string)) {
+            return res.status(403).json({ error: "Access denied to this unit" });
+          }
+          allRequests = await storage.getMaintenanceRequestsByUnitId(unitId as string);
+        } else {
+          allRequests = await storage.getAllMaintenanceRequests();
+        }
+        
+        // Filter to only property's units
+        requests = allRequests.filter(req => unitIds.includes(req.unitId));
+      }
+      // Tenant sees only their unit's requests
+      else if (user.role === "TENANT" && user.ownerId) {
+        // Get tenant's unit
+        const tenants = await storage.getTenantsByOwnerId(user.ownerId);
+        if (tenants.length > 0 && tenants[0].unitId) {
+          let unitRequests = await storage.getMaintenanceRequestsByUnitId(tenants[0].unitId);
+          
+          // Apply status filter if provided
+          if (status) {
+            unitRequests = unitRequests.filter(req => req.status === status);
+          }
+          
+          requests = unitRequests;
+        } else {
+          requests = [];
+        }
+      }
+      else {
+        requests = [];
       }
       
       res.json(requests);
@@ -652,17 +920,76 @@ export function setupRoutes(app: Express) {
   });
 
   // ============= Transactions =============
-  app.get("/api/transactions", async (req, res) => {
+  app.get("/api/transactions", requireAuth, async (req, res) => {
     try {
-      const { status, ownerId } = req.query;
-      let transactions;
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
       
-      if (status) {
-        transactions = await storage.getTransactionsByStatus(status as string);
-      } else if (ownerId) {
-        transactions = await storage.getTransactionsByOwnerId(ownerId as string);
-      } else {
-        transactions = await storage.getAllTransactions();
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      const { status, ownerId } = req.query;
+      let transactions: Transaction[];
+      
+      // IT sees all transactions
+      if (user.role === "IT") {
+        if (status) {
+          transactions = await storage.getTransactionsByStatus(status as string);
+        } else if (ownerId) {
+          transactions = await storage.getTransactionsByOwnerId(ownerId as string);
+        } else {
+          transactions = await storage.getAllTransactions();
+        }
+      }
+      // Admin sees only transactions from their property
+      else if (user.role === "ADMIN" && user.propertyId) {
+        // Get all units in the property
+        const units = await storage.getUnitsByPropertyId(user.propertyId);
+        const unitIds = units.map(u => u.id);
+        
+        // Get all owner-unit relationships for these units
+        const ownerUnits = [];
+        for (const unitId of unitIds) {
+          const ous = await storage.getOwnerUnitsByUnitId(unitId);
+          ownerUnits.push(...ous);
+        }
+        
+        // Get unique owner IDs from the property
+        const propertyOwnerIds = Array.from(new Set(ownerUnits.map(ou => ou.ownerId)));
+        
+        let allTransactions;
+        if (status) {
+          allTransactions = await storage.getTransactionsByStatus(status as string);
+        } else if (ownerId) {
+          // Check if requested ownerId belongs to admin's property
+          if (!propertyOwnerIds.includes(ownerId as string)) {
+            return res.status(403).json({ error: "Access denied to this owner's transactions" });
+          }
+          allTransactions = await storage.getTransactionsByOwnerId(ownerId as string);
+        } else {
+          allTransactions = await storage.getAllTransactions();
+        }
+        
+        // Filter to only property's owners and units
+        transactions = allTransactions.filter(tx => 
+          (tx.ownerId && propertyOwnerIds.includes(tx.ownerId)) || 
+          (tx.unitId && unitIds.includes(tx.unitId))
+        );
+      }
+      // Tenant sees only their transactions
+      else if (user.role === "TENANT" && user.ownerId) {
+        let ownerTransactions = await storage.getTransactionsByOwnerId(user.ownerId);
+        
+        // Apply status filter if provided
+        if (status) {
+          ownerTransactions = ownerTransactions.filter(tx => tx.status === status);
+        }
+        
+        transactions = ownerTransactions;
+      }
+      else {
+        transactions = [];
       }
       
       res.json(transactions);
@@ -1038,9 +1365,25 @@ export function setupRoutes(app: Express) {
   });
 
   // ============= Account Payables =============
-  app.get("/api/account-payables", async (req, res) => {
+  app.get("/api/account-payables", requireAuth, async (req, res) => {
     try {
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      // Tenants should not access account payables
+      if (user.role === "TENANT") {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
       const { status } = req.query;
+      
+      // IT and Admin can view account payables
+      // Note: Account payables are not property-specific in the current schema
+      // If they should be filtered by property for admins, we'd need to add a propertyId field
       const payables = status 
         ? await storage.getAccountPayablesByStatus(status as string)
         : await storage.getAllAccountPayables();
@@ -1076,12 +1419,66 @@ export function setupRoutes(app: Express) {
   });
 
   // ============= Dashboard Statistics =============
-  app.get("/api/stats/dashboard", async (req, res) => {
+  app.get("/api/stats/dashboard", requireAuth, async (req, res) => {
     try {
-      const properties = await storage.getAllProperties();
-      const units = await storage.getAllUnits();
-      const tenants = await storage.getAllTenants();
-      const maintenanceRequests = await storage.getMaintenanceRequestsByStatus("submitted");
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      let properties: Property[], units: Unit[], tenants: Tenant[], maintenanceRequests: MaintenanceRequest[];
+      
+      // IT sees all statistics
+      if (user.role === "IT") {
+        properties = await storage.getAllProperties();
+        units = await storage.getAllUnits();
+        tenants = await storage.getAllTenants();
+        maintenanceRequests = await storage.getMaintenanceRequestsByStatus("submitted");
+      }
+      // Admin sees only their property's statistics
+      else if (user.role === "ADMIN" && user.propertyId) {
+        const property = await storage.getPropertyById(user.propertyId);
+        properties = property ? [property] : [];
+        
+        units = await storage.getUnitsByPropertyId(user.propertyId);
+        
+        // Get tenants from the property's units
+        const allTenants = await storage.getAllTenants();
+        const unitIds = units.map(u => u.id);
+        tenants = allTenants.filter(t => unitIds.includes(t.unitId));
+        
+        // Get maintenance requests from the property's units
+        const allRequests = await storage.getMaintenanceRequestsByStatus("submitted");
+        maintenanceRequests = allRequests.filter(r => unitIds.includes(r.unitId));
+      }
+      // Tenant sees limited statistics
+      else if (user.role === "TENANT" && user.ownerId) {
+        // Tenants get very limited stats - just their unit info
+        const userTenants = await storage.getTenantsByOwnerId(user.ownerId);
+        if (userTenants.length > 0 && userTenants[0].unitId) {
+          const unit = await storage.getUnitById(userTenants[0].unitId);
+          properties = [];
+          units = unit ? [unit] : [];
+          tenants = userTenants;
+          
+          // Get their unit's maintenance requests
+          const unitRequests = await storage.getMaintenanceRequestsByUnitId(userTenants[0].unitId);
+          maintenanceRequests = unitRequests.filter(r => r.status === "submitted");
+        } else {
+          properties = [];
+          units = [];
+          tenants = [];
+          maintenanceRequests = [];
+        }
+      }
+      else {
+        properties = [];
+        units = [];
+        tenants = [];
+        maintenanceRequests = [];
+      }
       
       const occupiedUnits = units.filter(u => u.status === "occupied").length;
       const occupancyRate = units.length > 0 ? Math.round((occupiedUnits / units.length) * 100) : 0;

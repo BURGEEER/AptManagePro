@@ -7,11 +7,16 @@ import session from "express-session";
 const app = express();
 
 // Session configuration - enforce strong security
-const sessionSecret = process.env.SESSION_SECRET || 'propertyprof00fb94d2e2b3fc49d7cc24a8da19c9b0';
+const sessionSecret = process.env.SESSION_SECRET;
 
-// Warn about default secret in production
-if (!process.env.SESSION_SECRET) {
-  console.warn('⚠️  WARNING: Using default SESSION_SECRET. Set SESSION_SECRET environment variable for production!');
+// Require SESSION_SECRET to be explicitly set
+if (!sessionSecret) {
+  console.error('❌ ERROR: SESSION_SECRET environment variable is required!');
+  console.error('Please set a strong, random session secret:');
+  console.error('  export SESSION_SECRET=$(openssl rand -hex 32)');
+  console.error('Or for development only:');
+  console.error('  export SESSION_SECRET=dev-secret-change-in-production');
+  process.exit(1);
 }
 
 app.use(session({

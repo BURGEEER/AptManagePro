@@ -215,6 +215,10 @@ export class PgStorage implements IStorage {
     return db.select().from(tenants).where(eq(tenants.unitId, unitId));
   }
 
+  async getTenantsByOwnerId(ownerId: string): Promise<Tenant[]> {
+    return db.select().from(tenants).where(eq(tenants.ownerId, ownerId));
+  }
+
   async getAllTenants(): Promise<Tenant[]> {
     return db.select().from(tenants);
   }
