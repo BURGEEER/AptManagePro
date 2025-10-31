@@ -37,15 +37,25 @@ function useAuth() {
 }
 
 function AuthenticatedLayout() {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const { user, isLoading } = useAuth();
   
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await fetch('/api/auth/logout', { 
+      method: 'POST',
+      credentials: 'include' 
+    });
     localStorage.removeItem('user');
     queryClient.clear();
     setLocation('/login');
   };
+
+  // Use useEffect to handle navigation to avoid hook issues
+  useEffect(() => {
+    if (!isLoading && !user) {
+      setLocation('/login');
+    }
+  }, [isLoading, user, setLocation]);
 
   if (isLoading) {
     return (
@@ -59,7 +69,6 @@ function AuthenticatedLayout() {
   }
 
   if (!user) {
-    setLocation('/login');
     return null;
   }
 

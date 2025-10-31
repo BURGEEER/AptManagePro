@@ -65,11 +65,23 @@ export function setupRoutes(app: Express) {
   });
 
   app.post("/api/auth/logout", (req, res) => {
+    const sessionId = req.sessionID;
+    
+    // Properly destroy the session
     req.session?.destroy((err) => {
       if (err) {
+        console.error("Session destroy error:", err);
         return res.status(500).json({ error: "Failed to logout" });
       }
-      res.json({ success: true });
+      
+      // Clear the session cookie
+      res.clearCookie('propertypro.sid', {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict'
+      });
+      
+      res.json({ success: true, message: "Logged out successfully" });
     });
   });
 

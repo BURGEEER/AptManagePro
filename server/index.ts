@@ -6,16 +6,25 @@ import session from "express-session";
 
 const app = express();
 
-// Session configuration
+// Session configuration - enforce strong security
+const sessionSecret = process.env.SESSION_SECRET || 'propertyprof00fb94d2e2b3fc49d7cc24a8da19c9b0';
+
+// Warn about default secret in production
+if (!process.env.SESSION_SECRET) {
+  console.warn('⚠️  WARNING: Using default SESSION_SECRET. Set SESSION_SECRET environment variable for production!');
+}
+
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'propertyprof00fb94d2e2b3fc49d7cc24a8da19c9b0',
+  secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
   cookie: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
     maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+    sameSite: 'strict', // CSRF protection
   },
+  name: 'propertypro.sid', // Custom session name instead of default
 }));
 
 app.use(express.json());
