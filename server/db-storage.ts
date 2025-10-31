@@ -326,21 +326,125 @@ export class PgStorage implements IStorage {
     return result;
   }
 
+  async getCommunicationById(id: string): Promise<Communication | null> {
+    const [result] = await db.select().from(communications).where(eq(communications.id, id));
+    return result || null;
+  }
+
   async getCommunicationsByThreadId(threadId: string): Promise<Communication[]> {
-    return db.select().from(communications).where(eq(communications.threadId, threadId)).orderBy(communications.createdAt);
+    return db.select()
+      .from(communications)
+      .where(eq(communications.threadId, threadId))
+      .orderBy(communications.createdAt);
   }
 
   async getAllCommunicationThreads(): Promise<Communication[]> {
-    return db.select().from(communications).orderBy(desc(communications.createdAt));
+    // Returns unique threads (first message of each thread)
+    const allCommunications = await db.select()
+      .from(communications)
+      .orderBy(desc(communications.createdAt));
+    
+    // Group by threadId and return only the first message of each thread
+    const threadMap = new Map<string, Communication>();
+    for (const comm of allCommunications) {
+      if (!threadMap.has(comm.threadId)) {
+        threadMap.set(comm.threadId, comm);
+      }
+    }
+    return Array.from(threadMap.values());
+  }
+
+  async getCommunicationsBySenderId(senderId: string): Promise<Communication[]> {
+    // Returns unique threads where sender participated
+    const allCommunications = await db.select()
+      .from(communications)
+      .where(eq(communications.senderId, senderId))
+      .orderBy(desc(communications.createdAt));
+    
+    // Group by threadId and return only the first message of each thread
+    const threadMap = new Map<string, Communication>();
+    for (const comm of allCommunications) {
+      if (!threadMap.has(comm.threadId)) {
+        // Get the original thread starter
+        const [threadStarter] = await db.select()
+          .from(communications)
+          .where(eq(communications.threadId, comm.threadId))
+          .orderBy(communications.createdAt)
+          .limit(1);
+        threadMap.set(comm.threadId, threadStarter || comm);
+      }
+    }
+    return Array.from(threadMap.values());
+  }
+
+  async getCommunicationsByPropertyId(propertyId: string): Promise<Communication[]> {
+    // For admin - get communications from all owners/tenants in their property
+    const propertyOwners = await db.select()
+      .from(owners)
+      .innerJoin(ownerUnits, eq(owners.id, ownerUnits.ownerId))
+      .innerJoin(units, eq(ownerUnits.unitId, units.id))
+      .where(eq(units.propertyId, propertyId));
+    
+    const propertyTenants = await db.select()
+      .from(tenants)
+      .innerJoin(units, eq(tenants.unitId, units.id))
+      .where(eq(units.propertyId, propertyId));
+    
+    const ownerIds = propertyOwners.map(o => o.owners.id);
+    const tenantIds = propertyTenants.map(t => t.tenants.id);
+    const allSenderIds = [...ownerIds, ...tenantIds];
+    
+    if (allSenderIds.length === 0) {
+      return [];
+    }
+    
+    const allCommunications = await db.select()
+      .from(communications)
+      .orderBy(desc(communications.createdAt));
+    
+    // Filter communications and group by threadId
+    const threadMap = new Map<string, Communication>();
+    for (const comm of allCommunications) {
+      // Include if sender is from this property or if it's from admin/IT
+      if (allSenderIds.includes(comm.senderId || '') || 
+          comm.senderRole === 'admin' || 
+          comm.senderRole === 'IT') {
+        if (!threadMap.has(comm.threadId)) {
+          // Get the original thread starter
+          const [threadStarter] = await db.select()
+            .from(communications)
+            .where(eq(communications.threadId, comm.threadId))
+            .orderBy(communications.createdAt)
+            .limit(1);
+          threadMap.set(comm.threadId, threadStarter || comm);
+        }
+      }
+    }
+    return Array.from(threadMap.values());
   }
 
   async updateCommunication(id: string, communication: Partial<InsertCommunication>): Promise<Communication | null> {
-    const [result] = await db.update(communications).set(communication).where(eq(communications.id, id)).returning();
+    const [result] = await db.update(communications)
+      .set(communication)
+      .where(eq(communications.id, id))
+      .returning();
     return result || null;
+  }
+
+  async updateCommunicationStatusByThreadId(threadId: string, status: string): Promise<boolean> {
+    const result = await db.update(communications)
+      .set({ status })
+      .where(eq(communications.threadId, threadId));
+    return (result.rowCount ?? 0) > 0;
   }
 
   async deleteCommunication(id: string): Promise<boolean> {
     const result = await db.delete(communications).where(eq(communications.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async deleteCommunicationsByThreadId(threadId: string): Promise<boolean> {
+    const result = await db.delete(communications).where(eq(communications.threadId, threadId));
     return (result.rowCount ?? 0) > 0;
   }
 

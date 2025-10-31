@@ -525,19 +525,94 @@ export function setupRoutes(app: Express) {
   });
 
   // ============= Utility Readings =============
-  app.get("/api/utility-readings", async (req, res) => {
+  // Tenants can only view their unit's readings; IT/Admin can view all
+  app.get("/api/utility-readings", requireAuth, async (req, res) => {
     try {
-      const { unitId } = req.query;
-      const readings = unitId 
-        ? await storage.getUtilityReadingsByUnitId(unitId as string)
-        : await storage.getLatestUtilityReadings();
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      const { unitId, propertyId } = req.query;
+      let readings: any[] = [];
+      
+      if (user.role === "TENANT") {
+        // Tenants can only see their own unit's readings
+        // First, get the tenant's unit through their owner record
+        if (user.ownerId) {
+          const owner = await storage.getOwnerById(user.ownerId);
+          if (owner) {
+            const ownerUnits = await storage.getOwnerUnitsByOwnerId(owner.id);
+            if (ownerUnits.length > 0) {
+              readings = await storage.getUtilityReadingsByUnitId(ownerUnits[0].unitId);
+            } else {
+              readings = [];
+            }
+          } else {
+            readings = [];
+          }
+        } else {
+          readings = [];
+        }
+      } else {
+        // IT and Admin can view filtered or all readings
+        if (unitId) {
+          readings = await storage.getUtilityReadingsByUnitId(unitId as string);
+        } else if (propertyId) {
+          // Get all units for the property and then their readings
+          const units = await storage.getUnitsByPropertyId(propertyId as string);
+          readings = [];
+          for (const unit of units) {
+            const unitReadings = await storage.getUtilityReadingsByUnitId(unit.id);
+            readings.push(...unitReadings);
+          }
+        } else {
+          readings = await storage.getLatestUtilityReadings();
+        }
+      }
+      
       res.json(readings);
     } catch (error) {
+      console.error("Failed to fetch utility readings:", error);
       res.status(500).json({ error: "Failed to fetch utility readings" });
     }
   });
 
-  app.post("/api/utility-readings", express.json(), async (req, res) => {
+  // Get readings for specific unit - IT/Admin can access any unit, Tenants only their own
+  app.get("/api/utility-readings/unit/:unitId", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      // Check access for tenants
+      if (user.role === "TENANT") {
+        let hasAccess = false;
+        if (user.ownerId) {
+          const ownerUnits = await storage.getOwnerUnitsByOwnerId(user.ownerId);
+          hasAccess = ownerUnits.some(ou => ou.unitId === req.params.unitId);
+        }
+        
+        if (!hasAccess) {
+          return res.status(403).json({ error: "Insufficient permissions to view this unit's readings" });
+        }
+      }
+      
+      const readings = await storage.getUtilityReadingsByUnitId(req.params.unitId);
+      res.json(readings);
+    } catch (error) {
+      console.error("Failed to fetch unit utility readings:", error);
+      res.status(500).json({ error: "Failed to fetch unit utility readings" });
+    }
+  });
+
+  // Only IT and Admin can record new readings
+  app.post("/api/utility-readings", requireRole(["IT", "ADMIN"]), express.json(), async (req, res) => {
     try {
       const parsed = insertUtilityReadingSchema.parse(req.body);
       const reading = await storage.createUtilityReading(parsed);
@@ -547,6 +622,32 @@ export function setupRoutes(app: Express) {
         return res.status(400).json({ error: "Invalid reading data", details: error.errors });
       }
       res.status(500).json({ error: "Failed to create utility reading" });
+    }
+  });
+
+  // Only IT and Admin can update readings
+  app.patch("/api/utility-readings/:id", requireRole(["IT", "ADMIN"]), express.json(), async (req, res) => {
+    try {
+      const reading = await storage.updateUtilityReading(req.params.id, req.body);
+      if (!reading) {
+        return res.status(404).json({ error: "Utility reading not found" });
+      }
+      res.json(reading);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update utility reading" });
+    }
+  });
+
+  // Only IT and Admin can delete readings
+  app.delete("/api/utility-readings/:id", requireRole(["IT", "ADMIN"]), async (req, res) => {
+    try {
+      const success = await storage.deleteUtilityReading(req.params.id);
+      if (!success) {
+        return res.status(404).json({ error: "Utility reading not found" });
+      }
+      res.status(204).end();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete utility reading" });
     }
   });
 
@@ -608,33 +709,274 @@ export function setupRoutes(app: Express) {
   });
 
   // ============= Communications =============
-  app.get("/api/communications", async (req, res) => {
+  // GET /api/communications - List all communications (filtered by role)
+  app.get("/api/communications", requireAuth, async (req, res) => {
     try {
-      const { threadId } = req.query;
-      const communications = threadId 
-        ? await storage.getCommunicationsByThreadId(threadId as string)
-        : await storage.getAllCommunicationThreads();
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      let communications;
+      
+      if (user.role === "IT") {
+        // IT sees all communications
+        communications = await storage.getAllCommunicationThreads();
+      } else if (user.role === "ADMIN") {
+        // Admin sees communications for their property
+        if (!user.propertyId) {
+          return res.status(400).json({ error: "Admin user has no property assigned" });
+        }
+        communications = await storage.getCommunicationsByPropertyId(user.propertyId);
+      } else if (user.role === "TENANT") {
+        // Tenant sees only their own communications
+        if (!user.ownerId) {
+          return res.status(400).json({ error: "Tenant user has no owner/tenant record linked" });
+        }
+        communications = await storage.getCommunicationsBySenderId(user.ownerId);
+      } else {
+        return res.status(403).json({ error: "Invalid user role" });
+      }
+      
       res.json(communications);
     } catch (error) {
+      console.error("Failed to fetch communications:", error);
       res.status(500).json({ error: "Failed to fetch communications" });
     }
   });
 
-  app.post("/api/communications", express.json(), async (req, res) => {
+  // GET /api/communications/:id - Get single communication with all messages in thread
+  app.get("/api/communications/:id", requireAuth, async (req, res) => {
     try {
-      const parsed = insertCommunicationSchema.parse(req.body);
+      const communication = await storage.getCommunicationById(req.params.id);
+      
+      if (!communication) {
+        return res.status(404).json({ error: "Communication not found" });
+      }
+      
+      // Check access rights
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      // Check role-based access
+      if (user.role === "TENANT" && communication.senderId !== user.ownerId) {
+        // Tenant can only view their own communications
+        return res.status(403).json({ error: "Access denied" });
+      } else if (user.role === "ADMIN") {
+        // Admin can only view communications from their property
+        if (!user.propertyId) {
+          return res.status(400).json({ error: "Admin user has no property assigned" });
+        }
+        // Check if communication belongs to someone in their property
+        const propertyComms = await storage.getCommunicationsByPropertyId(user.propertyId);
+        const isInProperty = propertyComms.some(c => c.threadId === communication.threadId);
+        if (!isInProperty) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+      }
+      // IT role can see all communications
+      
+      // Get all messages in the thread
+      const threadMessages = await storage.getCommunicationsByThreadId(communication.threadId);
+      
+      res.json({
+        thread: communication,
+        messages: threadMessages
+      });
+    } catch (error) {
+      console.error("Failed to fetch communication:", error);
+      res.status(500).json({ error: "Failed to fetch communication" });
+    }
+  });
+
+  // POST /api/communications - Create new communication/ticket
+  app.post("/api/communications", requireAuth, express.json(), async (req, res) => {
+    try {
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      // Generate thread ID for new conversation
+      const threadId = req.body.threadId || `THREAD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+      
+      // Prepare communication data
+      const communicationData = {
+        ...req.body,
+        threadId,
+        senderId: user.ownerId || user.id, // Use ownerId for tenant/owner, user.id for IT/ADMIN
+        senderName: user.fullName || user.username,
+        senderRole: user.role.toLowerCase(),
+        status: req.body.status || "open",
+      };
+      
+      const parsed = insertCommunicationSchema.parse(communicationData);
       const communication = await storage.createCommunication(parsed);
       res.status(201).json(communication);
     } catch (error: any) {
       if (error.name === "ZodError") {
         return res.status(400).json({ error: "Invalid communication data", details: error.errors });
       }
+      console.error("Failed to create communication:", error);
       res.status(500).json({ error: "Failed to create communication" });
     }
   });
 
+  // POST /api/communications/:id/messages - Add message to communication thread
+  app.post("/api/communications/:id/messages", requireAuth, express.json(), async (req, res) => {
+    try {
+      const communication = await storage.getCommunicationById(req.params.id);
+      
+      if (!communication) {
+        return res.status(404).json({ error: "Communication not found" });
+      }
+      
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      // Check access rights (same logic as GET /api/communications/:id)
+      if (user.role === "TENANT" && communication.senderId !== user.ownerId) {
+        return res.status(403).json({ error: "Access denied" });
+      } else if (user.role === "ADMIN") {
+        if (!user.propertyId) {
+          return res.status(400).json({ error: "Admin user has no property assigned" });
+        }
+        const propertyComms = await storage.getCommunicationsByPropertyId(user.propertyId);
+        const isInProperty = propertyComms.some(c => c.threadId === communication.threadId);
+        if (!isInProperty) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+      }
+      
+      // Create the reply message
+      const replyData = {
+        threadId: communication.threadId,
+        senderId: user.ownerId || user.id,
+        senderName: user.fullName || user.username,
+        senderRole: user.role.toLowerCase(),
+        subject: communication.subject, // Keep original subject
+        message: req.body.message,
+        category: communication.category, // Keep original category
+        status: req.body.status || communication.status, // Allow status update or keep current
+        attachments: req.body.attachments || [],
+      };
+      
+      const parsed = insertCommunicationSchema.parse(replyData);
+      const reply = await storage.createCommunication(parsed);
+      
+      // If status was updated in the message, update all messages in thread
+      if (req.body.status && req.body.status !== communication.status) {
+        await storage.updateCommunicationStatusByThreadId(communication.threadId, req.body.status);
+      }
+      
+      res.status(201).json(reply);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ error: "Invalid message data", details: error.errors });
+      }
+      console.error("Failed to add message:", error);
+      res.status(500).json({ error: "Failed to add message to communication" });
+    }
+  });
+
+  // PATCH /api/communications/:id - Update communication status
+  app.patch("/api/communications/:id", requireAuth, express.json(), async (req, res) => {
+    try {
+      const communication = await storage.getCommunicationById(req.params.id);
+      
+      if (!communication) {
+        return res.status(404).json({ error: "Communication not found" });
+      }
+      
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      // Only IT and ADMIN can update status
+      if (user.role !== "IT" && user.role !== "ADMIN") {
+        return res.status(403).json({ error: "Only IT and Admin can update communication status" });
+      }
+      
+      // Admin can only update communications from their property
+      if (user.role === "ADMIN") {
+        if (!user.propertyId) {
+          return res.status(400).json({ error: "Admin user has no property assigned" });
+        }
+        const propertyComms = await storage.getCommunicationsByPropertyId(user.propertyId);
+        const isInProperty = propertyComms.some(c => c.threadId === communication.threadId);
+        if (!isInProperty) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+      }
+      
+      // Update the communication and all messages in the thread
+      const updatedCommunication = await storage.updateCommunication(req.params.id, req.body);
+      
+      // If status is being updated, update all messages in thread
+      if (req.body.status) {
+        await storage.updateCommunicationStatusByThreadId(communication.threadId, req.body.status);
+      }
+      
+      res.json(updatedCommunication);
+    } catch (error) {
+      console.error("Failed to update communication:", error);
+      res.status(500).json({ error: "Failed to update communication" });
+    }
+  });
+
+  // DELETE /api/communications/:id - Delete communication
+  app.delete("/api/communications/:id", requireAuth, async (req, res) => {
+    try {
+      const communication = await storage.getCommunicationById(req.params.id);
+      
+      if (!communication) {
+        return res.status(404).json({ error: "Communication not found" });
+      }
+      
+      const userId = req.session?.userId;
+      const user = await storage.getUser(userId!);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      // Only IT can delete communications
+      if (user.role !== "IT") {
+        return res.status(403).json({ error: "Only IT can delete communications" });
+      }
+      
+      // Delete entire thread
+      const success = await storage.deleteCommunicationsByThreadId(communication.threadId);
+      
+      if (!success) {
+        return res.status(500).json({ error: "Failed to delete communication thread" });
+      }
+      
+      res.status(204).end();
+    } catch (error) {
+      console.error("Failed to delete communication:", error);
+      res.status(500).json({ error: "Failed to delete communication" });
+    }
+  });
+
   // ============= Announcements =============
-  app.get("/api/announcements", async (req, res) => {
+  // All authenticated users can view announcements
+  app.get("/api/announcements", requireAuth, async (req, res) => {
     try {
       const announcements = await storage.getActiveAnnouncements();
       res.json(announcements);
@@ -643,7 +985,7 @@ export function setupRoutes(app: Express) {
     }
   });
 
-  app.get("/api/announcements/:id", async (req, res) => {
+  app.get("/api/announcements/:id", requireAuth, async (req, res) => {
     try {
       const announcement = await storage.getAnnouncementById(req.params.id);
       if (!announcement) {
@@ -655,7 +997,8 @@ export function setupRoutes(app: Express) {
     }
   });
 
-  app.post("/api/announcements", express.json(), async (req, res) => {
+  // Only IT and Admin can create announcements
+  app.post("/api/announcements", requireRole(["IT", "ADMIN"]), express.json(), async (req, res) => {
     try {
       const parsed = insertAnnouncementSchema.parse(req.body);
       const announcement = await storage.createAnnouncement(parsed);
@@ -668,7 +1011,8 @@ export function setupRoutes(app: Express) {
     }
   });
 
-  app.patch("/api/announcements/:id", express.json(), async (req, res) => {
+  // Only IT and Admin can update announcements
+  app.patch("/api/announcements/:id", requireRole(["IT", "ADMIN"]), express.json(), async (req, res) => {
     try {
       const announcement = await storage.updateAnnouncement(req.params.id, req.body);
       if (!announcement) {
@@ -677,6 +1021,19 @@ export function setupRoutes(app: Express) {
       res.json(announcement);
     } catch (error) {
       res.status(500).json({ error: "Failed to update announcement" });
+    }
+  });
+
+  // Only IT and Admin can delete announcements
+  app.delete("/api/announcements/:id", requireRole(["IT", "ADMIN"]), async (req, res) => {
+    try {
+      const success = await storage.deleteAnnouncement(req.params.id);
+      if (!success) {
+        return res.status(404).json({ error: "Announcement not found" });
+      }
+      res.status(204).end();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete announcement" });
     }
   });
 
