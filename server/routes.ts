@@ -6,10 +6,11 @@ import {
   insertAnnouncementSchema, insertUtilityReadingSchema, insertOwnerUnitSchema,
   insertParkingSlotSchema, insertAccountPayableSchema, insertUserSchema, insertReportSchema,
   insertProjectSchema, insertContractorSchema, insertDenrDocumentSchema, insertDocumentSchema,
+  insertVendorSchema,
   type Property, type Unit, type Owner, type Tenant, type MaintenanceRequest, 
   type Transaction, type Communication, type Announcement, type UtilityReading,
   type OwnerUnit, type ParkingSlot, type AccountPayable, type User, type Report,
-  type Project, type Contractor, type DenrDocument, type Document, type AuditLog
+  type Project, type Contractor, type DenrDocument, type Document, type AuditLog, type Vendor
 } from "@shared/schema";
 import { PgStorage } from "./db-storage";
 import { z } from "zod";
@@ -1524,20 +1525,34 @@ export function setupRoutes(app: Express) {
       let communications;
       
       if (user.role === "IT") {
-        // IT sees all communications
-        communications = await storage.getAllCommunicationThreads();
+        // IT sees all communications (only parent messages, not replies)
+        communications = await storage.getAllCommunications();
+        // Filter to only show parent messages (threads)
+        communications = communications.filter(c => !c.parentId);
       } else if (user.role === "ADMIN") {
         // Admin sees communications for their property
         if (!user.propertyId) {
           return res.status(400).json({ error: "Admin user has no property assigned" });
         }
         communications = await storage.getCommunicationsByPropertyId(user.propertyId);
+        // Filter to only show parent messages (threads)
+        communications = communications.filter(c => !c.parentId);
       } else if (user.role === "TENANT") {
         // Tenant sees only their own communications
-        if (!user.ownerId) {
-          return res.status(400).json({ error: "Tenant user has no owner/tenant record linked" });
+        communications = await storage.getCommunicationsByUserId(user.id);
+        if (user.ownerId) {
+          const tenantComms = await storage.getCommunicationsByTenantId(user.ownerId);
+          communications = [...communications, ...tenantComms];
         }
-        communications = await storage.getCommunicationsBySenderId(user.ownerId);
+        // Remove duplicates and filter to only show parent messages
+        const uniqueIds = new Set();
+        communications = communications.filter(c => {
+          if (!c.parentId && !uniqueIds.has(c.id)) {
+            uniqueIds.add(c.id);
+            return true;
+          }
+          return false;
+        });
       } else {
         return res.status(403).json({ error: "Invalid user role" });
       }
@@ -1567,29 +1582,29 @@ export function setupRoutes(app: Express) {
       }
       
       // Check role-based access
-      if (user.role === "TENANT" && communication.senderId !== user.ownerId) {
+      if (user.role === "TENANT") {
         // Tenant can only view their own communications
-        return res.status(403).json({ error: "Access denied" });
+        if (communication.userId !== user.id && communication.tenantId !== user.ownerId) {
+          return res.status(403).json({ error: "Access denied" });
+        }
       } else if (user.role === "ADMIN") {
         // Admin can only view communications from their property
         if (!user.propertyId) {
           return res.status(400).json({ error: "Admin user has no property assigned" });
         }
-        // Check if communication belongs to someone in their property
-        const propertyComms = await storage.getCommunicationsByPropertyId(user.propertyId);
-        const isInProperty = propertyComms.some(c => c.threadId === communication.threadId);
-        if (!isInProperty) {
+        // Check if communication belongs to their property
+        if (communication.propertyId !== user.propertyId) {
           return res.status(403).json({ error: "Access denied" });
         }
       }
       // IT role can see all communications
       
-      // Get all messages in the thread
-      const threadMessages = await storage.getCommunicationsByThreadId(communication.threadId);
+      // Get all replies to this communication
+      const replies = await storage.getCommunicationReplies(communication.id);
       
       res.json({
         thread: communication,
-        messages: threadMessages
+        messages: [communication, ...replies]
       });
     } catch (error) {
       console.error("Failed to fetch communication:", error);
@@ -1607,17 +1622,19 @@ export function setupRoutes(app: Express) {
         return res.status(404).json({ error: "User not found" });
       }
       
-      // Generate thread ID for new conversation
-      const threadId = req.body.threadId || `THREAD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-      
       // Prepare communication data
       const communicationData = {
-        ...req.body,
-        threadId,
-        senderId: user.ownerId || user.id, // Use ownerId for tenant/owner, user.id for IT/ADMIN
-        senderName: user.fullName || user.username,
-        senderRole: user.role.toLowerCase(),
+        propertyId: req.body.propertyId || user.propertyId || null,
+        unitId: req.body.unitId || null,
+        tenantId: user.role === "TENANT" ? user.ownerId : req.body.tenantId || null,
+        userId: user.id,
+        type: req.body.type || "inquiry", // inquiry, complaint, notification, announcement
+        subject: req.body.subject,
+        message: req.body.message,
         status: req.body.status || "open",
+        priority: req.body.priority || "normal",
+        parentId: req.body.parentId || null, // For replies
+        attachments: req.body.attachments || [],
       };
       
       const parsed = insertCommunicationSchema.parse(communicationData);
@@ -1648,39 +1665,41 @@ export function setupRoutes(app: Express) {
         return res.status(404).json({ error: "User not found" });
       }
       
-      // Check access rights (same logic as GET /api/communications/:id)
-      if (user.role === "TENANT" && communication.senderId !== user.ownerId) {
-        return res.status(403).json({ error: "Access denied" });
+      // Check access rights
+      if (user.role === "TENANT") {
+        if (communication.userId !== user.id && communication.tenantId !== user.ownerId) {
+          return res.status(403).json({ error: "Access denied" });
+        }
       } else if (user.role === "ADMIN") {
         if (!user.propertyId) {
           return res.status(400).json({ error: "Admin user has no property assigned" });
         }
-        const propertyComms = await storage.getCommunicationsByPropertyId(user.propertyId);
-        const isInProperty = propertyComms.some(c => c.threadId === communication.threadId);
-        if (!isInProperty) {
+        if (communication.propertyId !== user.propertyId) {
           return res.status(403).json({ error: "Access denied" });
         }
       }
       
       // Create the reply message
       const replyData = {
-        threadId: communication.threadId,
-        senderId: user.ownerId || user.id,
-        senderName: user.fullName || user.username,
-        senderRole: user.role.toLowerCase(),
+        propertyId: communication.propertyId,
+        unitId: communication.unitId,
+        tenantId: communication.tenantId,
+        userId: user.id,
+        type: communication.type, // Keep original type
         subject: communication.subject, // Keep original subject
         message: req.body.message,
-        category: communication.category, // Keep original category
         status: req.body.status || communication.status, // Allow status update or keep current
+        priority: communication.priority,
+        parentId: communication.id, // Set parent to the original message
         attachments: req.body.attachments || [],
       };
       
       const parsed = insertCommunicationSchema.parse(replyData);
       const reply = await storage.createCommunication(parsed);
       
-      // If status was updated in the message, update all messages in thread
+      // If status was updated, update the original communication
       if (req.body.status && req.body.status !== communication.status) {
-        await storage.updateCommunicationStatusByThreadId(communication.threadId, req.body.status);
+        await storage.updateCommunication(communication.id, { status: req.body.status });
       }
       
       res.status(201).json(reply);
@@ -1719,19 +1738,20 @@ export function setupRoutes(app: Express) {
         if (!user.propertyId) {
           return res.status(400).json({ error: "Admin user has no property assigned" });
         }
-        const propertyComms = await storage.getCommunicationsByPropertyId(user.propertyId);
-        const isInProperty = propertyComms.some(c => c.threadId === communication.threadId);
-        if (!isInProperty) {
+        if (communication.propertyId !== user.propertyId) {
           return res.status(403).json({ error: "Access denied" });
         }
       }
       
-      // Update the communication and all messages in the thread
+      // Update the communication and all replies if status changes
       const updatedCommunication = await storage.updateCommunication(req.params.id, req.body);
       
-      // If status is being updated, update all messages in thread
+      // If status is being updated, update all replies too
       if (req.body.status) {
-        await storage.updateCommunicationStatusByThreadId(communication.threadId, req.body.status);
+        const replies = await storage.getCommunicationReplies(communication.id);
+        for (const reply of replies) {
+          await storage.updateCommunication(reply.id, { status: req.body.status });
+        }
       }
       
       res.json(updatedCommunication);
@@ -1762,11 +1782,19 @@ export function setupRoutes(app: Express) {
         return res.status(403).json({ error: "Only IT can delete communications" });
       }
       
-      // Delete entire thread
-      const success = await storage.deleteCommunicationsByThreadId(communication.threadId);
+      // Delete communication and all its replies
+      const replies = await storage.getCommunicationReplies(communication.id);
+      
+      // Delete all replies first
+      for (const reply of replies) {
+        await storage.deleteCommunication(reply.id);
+      }
+      
+      // Delete the main communication
+      const success = await storage.deleteCommunication(communication.id);
       
       if (!success) {
-        return res.status(500).json({ error: "Failed to delete communication thread" });
+        return res.status(500).json({ error: "Failed to delete communication" });
       }
       
       res.status(204).end();
@@ -2086,13 +2114,10 @@ export function setupRoutes(app: Express) {
         propertyId: targetPropertyId || null,
         type: "engineering",
         name: `Engineering Report - ${new Date().toLocaleDateString()}`,
-        description: "Maintenance requests status and analysis",
         parameters: { startDate, endDate, propertyId: targetPropertyId },
         generatedBy: userId,
-        status: "completed",
         format: "json",
         data: reportData,
-        fileUrl: null,
       });
 
       res.json({ report, data: reportData });
@@ -2160,13 +2185,10 @@ export function setupRoutes(app: Express) {
         propertyId: targetPropertyId || null,
         type: "billing",
         name: `Billing Report - ${new Date().toLocaleDateString()}`,
-        description: "Monthly billing and payment summary",
         parameters: { startDate, endDate, propertyId: targetPropertyId },
         generatedBy: userId,
-        status: "completed",
         format: "json",
         data: reportData,
-        fileUrl: null,
       });
 
       res.json({ report, data: reportData });
@@ -2231,13 +2253,10 @@ export function setupRoutes(app: Express) {
         propertyId: targetPropertyId || null,
         type: "soa",
         name: `Statement of Account - ${new Date().toLocaleDateString()}`,
-        description: "Detailed financial statement",
         parameters: { unitId, ownerId, propertyId: targetPropertyId },
         generatedBy: userId,
-        status: "completed",
         format: "json",
         data: reportData,
-        fileUrl: null,
       });
 
       res.json({ report, data: reportData });
@@ -2308,13 +2327,10 @@ export function setupRoutes(app: Express) {
         propertyId: targetPropertyId || null,
         type: "occupancy",
         name: `Occupancy Report - ${new Date().toLocaleDateString()}`,
-        description: "Unit occupancy rates and analysis",
         parameters: { propertyId: targetPropertyId },
         generatedBy: userId,
-        status: "completed",
         format: "json",
         data: reportData,
-        fileUrl: null,
       });
 
       res.json({ report, data: reportData });
@@ -2392,13 +2408,10 @@ export function setupRoutes(app: Express) {
         propertyId: targetPropertyId || null,
         type: "maintenance",
         name: `Maintenance Report - ${new Date().toLocaleDateString()}`,
-        description: "Maintenance request statistics and analysis",
         parameters: { startDate, endDate, propertyId: targetPropertyId },
         generatedBy: userId,
-        status: "completed",
         format: "json",
         data: reportData,
-        fileUrl: null,
       });
 
       res.json({ report, data: reportData });
@@ -2490,13 +2503,10 @@ export function setupRoutes(app: Express) {
         propertyId: targetPropertyId || null,
         type: "financial-summary",
         name: `Financial Summary - ${new Date().toLocaleDateString()}`,
-        description: "Complete financial overview with revenue and expenses",
         parameters: { startDate, endDate, propertyId: targetPropertyId },
         generatedBy: userId,
-        status: "completed",
         format: "json",
         data: reportData,
-        fileUrl: null,
       });
 
       res.json({ report, data: reportData });
@@ -2575,7 +2585,7 @@ export function setupRoutes(app: Express) {
       const currentYear = now.getFullYear();
       
       const monthlyTransactions = allTransactions.filter(t => {
-        const tDate = new Date(t.transactionDate);
+        const tDate = new Date(t.date);
         return tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
       });
       
@@ -2600,7 +2610,7 @@ export function setupRoutes(app: Express) {
       const lastMonthYear = currentMonth === 0 ? currentYear - 1 : currentYear;
       
       const lastMonthTransactions = allTransactions.filter(t => {
-        const tDate = new Date(t.transactionDate);
+        const tDate = new Date(t.date);
         return tDate.getMonth() === lastMonth && tDate.getFullYear() === lastMonthYear;
       });
       
@@ -2672,7 +2682,7 @@ export function setupRoutes(app: Express) {
         
         const monthlyRevenue = allTransactions
           .filter(t => {
-            const tDate = new Date(t.transactionDate);
+            const tDate = new Date(t.date);
             return tDate.getMonth() === monthNum && 
                    tDate.getFullYear() === year &&
                    t.type === 'payment' &&
@@ -2746,8 +2756,8 @@ export function setupRoutes(app: Express) {
         if (delinquentMap.has(key)) {
           const existing = delinquentMap.get(key);
           existing.totalOwed += parseFloat(transaction.amount || '0');
-          if (new Date(transaction.transactionDate) < new Date(existing.oldestTransaction)) {
-            existing.oldestTransaction = transaction.transactionDate;
+          if (new Date(transaction.date) < new Date(existing.oldestTransaction)) {
+            existing.oldestTransaction = transaction.date;
           }
         } else {
           delinquentMap.set(key, {
@@ -2756,8 +2766,8 @@ export function setupRoutes(app: Express) {
             unit: unit.unitNumber,
             property: property.name,
             totalOwed: parseFloat(transaction.amount || '0'),
-            oldestTransaction: transaction.transactionDate,
-            lastPayment: transaction.transactionDate
+            oldestTransaction: transaction.date,
+            lastPayment: transaction.date
           });
         }
       }
@@ -2891,28 +2901,28 @@ export function setupRoutes(app: Express) {
         {
           category: "Maintenance",
           amount: accountPayables
-            .filter(ap => ap.vendor.toLowerCase().includes('maintenance'))
+            .filter(ap => ap.vendor && ap.vendor.toLowerCase().includes('maintenance'))
             .reduce((sum, ap) => sum + parseFloat(ap.amount || '0'), 0),
           change: 8.2
         },
         {
           category: "Security",
           amount: accountPayables
-            .filter(ap => ap.vendor.toLowerCase().includes('security'))
+            .filter(ap => ap.vendor && ap.vendor.toLowerCase().includes('security'))
             .reduce((sum, ap) => sum + parseFloat(ap.amount || '0'), 0),
           change: -3.5
         },
         {
           category: "Utilities",
           amount: accountPayables
-            .filter(ap => ap.vendor.toLowerCase().includes('power') || ap.vendor.toLowerCase().includes('water'))
+            .filter(ap => ap.vendor && (ap.vendor.toLowerCase().includes('power') || ap.vendor.toLowerCase().includes('water')))
             .reduce((sum, ap) => sum + parseFloat(ap.amount || '0'), 0),
           change: 12.1
         },
         {
           category: "Landscaping",
           amount: accountPayables
-            .filter(ap => ap.vendor.toLowerCase().includes('landscap'))
+            .filter(ap => ap.vendor && ap.vendor.toLowerCase().includes('landscap'))
             .reduce((sum, ap) => sum + parseFloat(ap.amount || '0'), 0),
           change: 5.7
         }
@@ -3326,7 +3336,7 @@ export function setupRoutes(app: Express) {
         return res.status(404).json({ error: "User not found" });
       }
       
-      let vendors;
+      let vendors: Vendor[] = [];
       const { category, status, search } = req.query;
       
       if (user.role === "ADMIN" && user.propertyId) {
