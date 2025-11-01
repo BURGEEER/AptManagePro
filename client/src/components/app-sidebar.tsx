@@ -33,13 +33,50 @@ import { useQuery } from "@tanstack/react-query";
 import type { User } from "@shared/schema";
 
 const getAllMenuItems = (userRole?: string) => {
+  // Tenant-specific menu
+  if (userRole === 'TENANT') {
+    return [
+      {
+        title: "Dashboard",
+        url: "/",
+        icon: Home,
+      },
+      {
+        title: "My Unit",
+        url: "/my-unit",
+        icon: Building2,
+      },
+      {
+        title: "Payment History",
+        url: "/payment-history",
+        icon: Receipt,
+      },
+      {
+        title: "Maintenance Requests",
+        url: "/maintenance",
+        icon: Wrench,
+      },
+      {
+        title: "Communications",
+        url: "/communications",
+        icon: MessageSquare,
+      },
+      {
+        title: "My Documents",
+        url: "/my-documents",
+        icon: FileText,
+      },
+    ];
+  }
+
+  // Admin and IT menu items
   const baseItems = [
     {
       title: "Dashboard",
       url: "/",
       icon: Home,
       notification: 3,
-      roles: ['IT', 'ADMIN', 'TENANT'],
+      roles: ['IT', 'ADMIN'],
     },
     {
       title: "Users",
@@ -71,14 +108,14 @@ const getAllMenuItems = (userRole?: string) => {
       url: "/maintenance",
       icon: Wrench,
       notification: 5,
-      roles: ['IT', 'ADMIN', 'TENANT'],
+      roles: ['IT', 'ADMIN'],
     },
     {
       title: "Communications",
       url: "/communications",
       icon: MessageSquare,
       notification: 8,
-      roles: ['IT', 'ADMIN', 'TENANT'],
+      roles: ['IT', 'ADMIN'],
     },
     {
       title: "Financials",
@@ -109,7 +146,7 @@ const getAllMenuItems = (userRole?: string) => {
       title: "Documents",
       url: "/documents",
       icon: FileText,
-      roles: ['IT', 'ADMIN', 'TENANT'],
+      roles: ['IT', 'ADMIN'],
     },
     {
       title: "Vendors",

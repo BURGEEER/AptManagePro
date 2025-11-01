@@ -28,6 +28,10 @@ import AuditLogs from "@/pages/AuditLogs";
 import Login from "@/pages/Login";
 import PasswordReset from "@/pages/PasswordReset";
 import NotFound from "@/pages/not-found";
+// Tenant-specific pages
+import MyUnit from "@/pages/MyUnit";
+import PaymentHistory from "@/pages/PaymentHistory";
+import MyDocuments from "@/pages/MyDocuments";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
 import type { User } from "@shared/schema";
@@ -140,6 +144,10 @@ function Router() {
       <Route path="/audit-logs" component={AuditLogs} />
       <Route path="/settings" component={Settings} />
       <Route path="/notifications" component={Notifications} />
+      {/* Tenant-specific routes */}
+      <Route path="/my-unit" component={MyUnit} />
+      <Route path="/payment-history" component={PaymentHistory} />
+      <Route path="/my-documents" component={MyDocuments} />
       <Route component={NotFound} />
     </Switch>
   );
