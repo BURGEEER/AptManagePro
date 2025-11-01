@@ -139,7 +139,7 @@ export default function MyDocuments() {
     if (searchQuery) {
       filtered = filtered.filter(doc => 
         doc.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        doc.type?.toLowerCase().includes(searchQuery.toLowerCase())
+        doc.fileType?.toLowerCase().includes(searchQuery.toLowerCase())
       );
     }
 
@@ -150,7 +150,7 @@ export default function MyDocuments() {
 
     // Sort by upload date (most recent first)
     return filtered.sort((a, b) => 
-      new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
   }, [documents, searchQuery, categoryFilter]);
 
@@ -481,10 +481,10 @@ function DocumentList({
                 </Badge>
                 <span className="text-sm text-muted-foreground flex items-center gap-1">
                   <Calendar className="h-3 w-3" />
-                  {format(new Date(doc.uploadedAt), "MMM dd, yyyy")}
+                  {format(new Date(doc.createdAt), "MMM dd, yyyy")}
                 </span>
                 <span className="text-sm text-muted-foreground">
-                  {doc.fileSize ? `${(parseInt(doc.fileSize) / 1024).toFixed(1)} KB` : "N/A"}
+                  {doc.fileSize ? `${(doc.fileSize / 1024).toFixed(1)} KB` : "N/A"}
                 </span>
               </div>
             </div>

@@ -1,11 +1,33 @@
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/hooks/use-toast";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { 
   Select,
   SelectContent,
@@ -39,11 +61,22 @@ import {
 import { format } from "date-fns";
 import type { Transaction, Tenant } from "@shared/schema";
 
+// Schema for payment
+const paymentSchema = z.object({
+  amount: z.string().min(1, "Amount is required").regex(/^\d+\.?\d{0,2}$/, "Invalid amount format"),
+  paymentMethod: z.enum(["credit_card", "debit_card", "bank_transfer", "cash"]),
+  notes: z.string().optional(),
+});
+
+type PaymentFormData = z.infer<typeof paymentSchema>;
+
 export default function PaymentHistory() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [dateRange, setDateRange] = useState("all");
+  const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
+  const { toast } = useToast();
 
   // Fetch current user
   const { data: currentUser, isLoading: isUserLoading } = useQuery<any>({
@@ -63,6 +96,50 @@ export default function PaymentHistory() {
   });
 
   const isLoading = isUserLoading || isTenantLoading || isTransactionsLoading;
+
+  // Form for payment
+  const form = useForm<PaymentFormData>({
+    resolver: zodResolver(paymentSchema),
+    defaultValues: {
+      amount: "",
+      paymentMethod: "credit_card",
+      notes: "",
+    },
+  });
+
+  // Create payment mutation
+  const createPayment = useMutation({
+    mutationFn: async (data: PaymentFormData) => {
+      const response = await apiRequest("POST", "/api/transactions", {
+        amount: data.amount,
+        type: "payment",
+        paymentMethod: data.paymentMethod,
+        description: data.notes || "Monthly rent payment",
+        status: "pending", // Will be processed by backend
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      setIsPaymentDialogOpen(false);
+      toast({
+        title: "Payment submitted",
+        description: "Your payment is being processed.",
+      });
+      form.reset();
+      queryClient.invalidateQueries({ queryKey: ["/api/transactions/me"] });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to process payment. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const onSubmitPayment = (data: PaymentFormData) => {
+    createPayment.mutate(data);
+  };
 
   // Check if user is a tenant
   if (!isLoading && currentUser?.role !== "TENANT") {
@@ -181,10 +258,10 @@ export default function PaymentHistory() {
   };
 
   // Get status variant
-  const getStatusVariant = (status: string): "default" | "secondary" | "success" | "destructive" | "outline" => {
+  const getStatusVariant = (status: string): "default" | "secondary" | "destructive" | "outline" => {
     switch(status) {
       case "completed":
-        return "success";
+        return "default";
       case "pending":
         return "secondary";
       case "failed":
@@ -216,10 +293,121 @@ export default function PaymentHistory() {
           <h1 className="text-3xl font-bold mb-2">Payment History</h1>
           <p className="text-muted-foreground">View and manage your payment transactions</p>
         </div>
-        <Button size="lg" className="gap-2" data-testid="button-make-payment">
-          <CreditCard className="h-4 w-4" />
-          Make Payment
-        </Button>
+        <Dialog open={isPaymentDialogOpen} onOpenChange={setIsPaymentDialogOpen}>
+          <DialogTrigger asChild>
+            <Button size="lg" className="gap-2" data-testid="button-make-payment">
+              <CreditCard className="h-4 w-4" />
+              Make Payment
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Make a Payment</DialogTitle>
+              <DialogDescription>
+                Enter the amount and payment details below
+              </DialogDescription>
+            </DialogHeader>
+            <Form {...form}>
+              <form onSubmit={form.handleSubmit(onSubmitPayment)} className="space-y-4">
+                <FormField
+                  control={form.control}
+                  name="amount"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Amount ($)</FormLabel>
+                      <FormControl>
+                        <Input 
+                          type="text" 
+                          placeholder="0.00" 
+                          {...field}
+                        />
+                      </FormControl>
+                      {statistics.currentBalance > 0 && (
+                        <div className="flex gap-2 mt-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => form.setValue("amount", statistics.currentBalance.toFixed(2))}
+                          >
+                            Pay Full Balance (${statistics.currentBalance.toFixed(2)})
+                          </Button>
+                          {tenant && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => form.setValue("amount", parseFloat(tenant.monthlyRent).toFixed(2))}
+                            >
+                              Monthly Rent (${parseFloat(tenant.monthlyRent).toFixed(2)})
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="paymentMethod"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Payment Method</FormLabel>
+                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select payment method" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="credit_card">Credit Card</SelectItem>
+                          <SelectItem value="debit_card">Debit Card</SelectItem>
+                          <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                          <SelectItem value="cash">Cash</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="notes"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Notes (Optional)</FormLabel>
+                      <FormControl>
+                        <Textarea
+                          placeholder="Add any notes about this payment..."
+                          className="resize-none"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <div className="flex justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setIsPaymentDialogOpen(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button 
+                    type="submit" 
+                    disabled={createPayment.isPending}
+                    data-testid="button-submit-payment"
+                  >
+                    {createPayment.isPending ? "Processing..." : "Submit Payment"}
+                  </Button>
+                </div>
+              </form>
+            </Form>
+          </DialogContent>
+        </Dialog>
       </div>
 
       {/* Statistics Cards */}

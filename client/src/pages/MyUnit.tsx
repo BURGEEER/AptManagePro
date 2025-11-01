@@ -1,10 +1,41 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useToast } from "@/hooks/use-toast";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { 
   Building2, 
   Calendar,
@@ -19,12 +50,27 @@ import {
   MapPin,
   Clock,
   Mail,
-  AlertCircle
+  AlertCircle,
+  Wrench,
+  Plus
 } from "lucide-react";
 import { format } from "date-fns";
 import type { Tenant, Unit, Property, Document } from "@shared/schema";
 
+// Schema for maintenance request
+const maintenanceRequestSchema = z.object({
+  title: z.string().min(3, "Title must be at least 3 characters"),
+  description: z.string().min(10, "Please provide at least 10 characters"),
+  priority: z.enum(["low", "normal", "urgent"]),
+  category: z.enum(["plumbing", "electrical", "hvac", "appliance", "structural", "other"]),
+});
+
+type MaintenanceRequestFormData = z.infer<typeof maintenanceRequestSchema>;
+
 export default function MyUnit() {
+  const [isMaintenanceDialogOpen, setIsMaintenanceDialogOpen] = useState(false);
+  const { toast } = useToast();
+  
   // Fetch current user's data
   const { data: currentUser, isLoading: isUserLoading } = useQuery<any>({
     queryKey: ["/api/auth/me"],
@@ -55,6 +101,48 @@ export default function MyUnit() {
   });
 
   const isLoading = isUserLoading || isTenantLoading || isUnitLoading || isPropertyLoading || isDocumentsLoading;
+
+  // Form for maintenance request
+  const form = useForm<MaintenanceRequestFormData>({
+    resolver: zodResolver(maintenanceRequestSchema),
+    defaultValues: {
+      title: "",
+      description: "",
+      priority: "normal",
+      category: "other",
+    },
+  });
+
+  // Create maintenance request mutation
+  const createMaintenanceRequest = useMutation({
+    mutationFn: async (data: MaintenanceRequestFormData) => {
+      const response = await apiRequest("POST", "/api/maintenance-requests", {
+        ...data,
+        unitId: unit?.id,
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      setIsMaintenanceDialogOpen(false);
+      toast({
+        title: "Request submitted",
+        description: "Your maintenance request has been submitted successfully.",
+      });
+      form.reset();
+      queryClient.invalidateQueries({ queryKey: ["/api/maintenance-requests/me"] });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to submit request. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const onSubmit = (data: MaintenanceRequestFormData) => {
+    createMaintenanceRequest.mutate(data);
+  };
 
   // Check if user is a tenant
   if (!isLoading && currentUser?.role !== "TENANT") {
@@ -107,9 +195,124 @@ export default function MyUnit() {
       {/* Unit Information Card */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Building2 className="h-5 w-5" />
-            Unit Information
+          <CardTitle className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Building2 className="h-5 w-5" />
+              Unit Information
+            </div>
+            <Dialog open={isMaintenanceDialogOpen} onOpenChange={setIsMaintenanceDialogOpen}>
+              <DialogTrigger asChild>
+                <Button size="sm" variant="outline" className="gap-2" data-testid="button-request-maintenance">
+                  <Wrench className="h-4 w-4" />
+                  Request Maintenance
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Submit Maintenance Request</DialogTitle>
+                  <DialogDescription>
+                    Describe the issue you're experiencing and we'll dispatch maintenance as soon as possible.
+                  </DialogDescription>
+                </DialogHeader>
+                <Form {...form}>
+                  <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                    <FormField
+                      control={form.control}
+                      name="title"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Issue Title</FormLabel>
+                          <FormControl>
+                            <Input placeholder="e.g., Leaking faucet" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="category"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Category</FormLabel>
+                          <Select onValueChange={field.onChange} defaultValue={field.value}>
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Select category" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="plumbing">Plumbing</SelectItem>
+                              <SelectItem value="electrical">Electrical</SelectItem>
+                              <SelectItem value="hvac">HVAC</SelectItem>
+                              <SelectItem value="appliance">Appliance</SelectItem>
+                              <SelectItem value="structural">Structural</SelectItem>
+                              <SelectItem value="other">Other</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="priority"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Priority</FormLabel>
+                          <Select onValueChange={field.onChange} defaultValue={field.value}>
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Select priority" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="low">Low - Can wait a few days</SelectItem>
+                              <SelectItem value="normal">Normal - Within 48 hours</SelectItem>
+                              <SelectItem value="urgent">Urgent - ASAP</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="description"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Description</FormLabel>
+                          <FormControl>
+                            <Textarea
+                              placeholder="Please describe the issue in detail..."
+                              className="resize-none"
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setIsMaintenanceDialogOpen(false)}
+                      >
+                        Cancel
+                      </Button>
+                      <Button 
+                        type="submit" 
+                        disabled={createMaintenanceRequest.isPending}
+                        data-testid="button-submit-maintenance"
+                      >
+                        {createMaintenanceRequest.isPending ? "Submitting..." : "Submit Request"}
+                      </Button>
+                    </div>
+                  </form>
+                </Form>
+              </DialogContent>
+            </Dialog>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -133,14 +336,14 @@ export default function MyUnit() {
               <div className="flex items-center gap-2">
                 <Building2 className="h-4 w-4 text-muted-foreground" />
                 <span className="font-medium">Type:</span>
-                <Badge variant="secondary">{unit.type}</Badge>
+                <Badge variant="secondary">{unit.bedrooms} BR</Badge>
               </div>
             </div>
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <Square className="h-4 w-4 text-muted-foreground" />
                 <span className="font-medium">Size:</span>
-                <span>{unit.size} sq ft</span>
+                <span>{unit.squareFeet || "N/A"} sq ft</span>
               </div>
               <div className="flex items-center gap-2">
                 <Home className="h-4 w-4 text-muted-foreground" />
@@ -198,7 +401,7 @@ export default function MyUnit() {
               <div className="flex items-center gap-2">
                 <Clock className="h-4 w-4 text-muted-foreground" />
                 <span className="font-medium">Status:</span>
-                <Badge variant={leaseStatus === "active" ? "success" : "destructive"}>
+                <Badge variant={leaseStatus === "active" ? "default" : "destructive"}>
                   {leaseStatus === "active" ? "Active" : "Expired"}
                 </Badge>
               </div>
@@ -207,12 +410,12 @@ export default function MyUnit() {
               <div className="flex items-center gap-2">
                 <DollarSign className="h-4 w-4 text-muted-foreground" />
                 <span className="font-medium">Monthly Rent:</span>
-                <span className="text-lg font-semibold">${tenant.rentAmount.toFixed(2)}</span>
+                <span className="text-lg font-semibold">${parseFloat(tenant.monthlyRent).toFixed(2)}</span>
               </div>
               <div className="flex items-center gap-2">
                 <DollarSign className="h-4 w-4 text-muted-foreground" />
                 <span className="font-medium">Security Deposit:</span>
-                <span>${tenant.depositAmount.toFixed(2)}</span>
+                <span>${tenant.securityDeposit ? parseFloat(tenant.securityDeposit).toFixed(2) : "0.00"}</span>
               </div>
               {daysUntilLeaseEnd <= 30 && daysUntilLeaseEnd > 0 && (
                 <Alert>
@@ -242,14 +445,14 @@ export default function MyUnit() {
                 <User className="h-4 w-4" />
                 Property Manager
               </h4>
-              <p className="text-sm text-muted-foreground">{property?.managerName || "Not assigned"}</p>
+              <p className="text-sm text-muted-foreground">Property Management Office</p>
               <p className="text-sm flex items-center gap-2">
                 <Phone className="h-3 w-3" />
-                {property?.managerPhone || "N/A"}
+                Contact via portal
               </p>
               <p className="text-sm flex items-center gap-2">
                 <Mail className="h-3 w-3" />
-                {property?.managerEmail || "N/A"}
+                Use messages section
               </p>
             </div>
             <div className="space-y-2">
@@ -299,7 +502,7 @@ export default function MyUnit() {
                     <div>
                       <p className="font-medium">{doc.name}</p>
                       <p className="text-sm text-muted-foreground">
-                        Uploaded {format(new Date(doc.uploadedAt), "MMM dd, yyyy")}
+                        Uploaded {format(new Date(doc.createdAt), "MMM dd, yyyy")}
                       </p>
                     </div>
                   </div>

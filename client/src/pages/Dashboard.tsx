@@ -197,7 +197,7 @@ export default function Dashboard() {
       openMaintenanceRequests,
       resolvedMaintenanceRequests,
       daysUntilLeaseEnd,
-      monthlyRent: tenantInfo?.rentAmount || 0,
+      monthlyRent: tenantInfo?.monthlyRent ? parseFloat(tenantInfo.monthlyRent) : 0,
     };
   }, [tenantTransactions, tenantMaintenanceRequests, tenantInfo, currentUser?.role]);
 
@@ -268,11 +268,16 @@ export default function Dashboard() {
 
   // Generate occupancy chart data
   const occupancyData = useMemo(() => {
-    const rate = statistics.occupancyRate;
-    return {
-      occupied: rate,
-      vacant: 100 - rate,
-    };
+    // Generate mock monthly occupancy data for the chart
+    const currentRate = statistics.occupancyRate;
+    return [
+      { month: "Jan", rate: Math.max(currentRate - 5, 0) },
+      { month: "Feb", rate: Math.max(currentRate - 3, 0) },
+      { month: "Mar", rate: Math.max(currentRate - 2, 0) },
+      { month: "Apr", rate: Math.max(currentRate - 1, 0) },
+      { month: "May", rate: currentRate },
+      { month: "Jun", rate: currentRate },
+    ];
   }, [statistics.occupancyRate]);
 
   // Format announcements for display
@@ -447,7 +452,7 @@ export default function Dashboard() {
                 <CardTitle className="text-sm font-medium text-muted-foreground">Lease Status</CardTitle>
               </CardHeader>
               <CardContent>
-                {tenantStatistics?.daysUntilLeaseEnd !== null && tenantStatistics.daysUntilLeaseEnd > 0 ? (
+                {tenantStatistics && tenantStatistics.daysUntilLeaseEnd !== null && tenantStatistics.daysUntilLeaseEnd > 0 ? (
                   <>
                     <p className="text-2xl font-bold">{tenantStatistics.daysUntilLeaseEnd}</p>
                     <p className="text-xs text-muted-foreground mt-1">days until renewal</p>
@@ -498,7 +503,7 @@ export default function Dashboard() {
                     </div>
                     <div>
                       <p className="text-sm text-muted-foreground">Type</p>
-                      <Badge variant="secondary">{tenantUnit.type}</Badge>
+                      <Badge variant="secondary">{tenantUnit.bedrooms} BR</Badge>
                     </div>
                   </div>
                 </CardContent>
@@ -535,7 +540,7 @@ export default function Dashboard() {
                           </div>
                           <div className="text-right">
                             <p className="font-medium">${parseFloat(payment.amount).toFixed(2)}</p>
-                            <Badge variant="success" className="text-xs">
+                            <Badge variant="default" className="text-xs">
                               <CheckCircle className="h-3 w-3 mr-1" />
                               Paid
                             </Badge>
@@ -580,7 +585,7 @@ export default function Dashboard() {
                           </div>
                           <Badge 
                             variant={
-                              request.status === "resolved" ? "success" :
+                              request.status === "resolved" ? "default" :
                               request.status === "in-progress" ? "secondary" :
                               "outline"
                             }
