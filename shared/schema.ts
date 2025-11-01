@@ -405,6 +405,52 @@ export const insertVendorSchema = createInsertSchema(vendors).omit({
 export type InsertVendor = z.infer<typeof insertVendorSchema>;
 export type Vendor = typeof vendors.$inferSelect;
 
+// ============= Documents =============
+export const documents = pgTable("documents", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  fileUrl: text("file_url").notNull(),
+  fileType: text("file_type").notNull(),
+  fileSize: integer("file_size").notNull(), // in bytes
+  uploadedBy: uuid("uploaded_by").notNull().references(() => users.id),
+  propertyId: uuid("property_id").references(() => properties.id),
+  category: text("category").notNull(), // lease, contract, receipt, report, maintenance, other
+  entityType: text("entity_type").notNull(), // property, unit, tenant, owner, maintenance_request
+  entityId: uuid("entity_id").notNull(),
+  isPrivate: boolean("is_private").default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertDocumentSchema = createInsertSchema(documents).omit({ 
+  id: true,
+  createdAt: true
+});
+export type InsertDocument = z.infer<typeof insertDocumentSchema>;
+export type Document = typeof documents.$inferSelect;
+
+// ============= Notifications =============
+export const notifications = pgTable("notifications", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  title: text("title").notNull(),
+  message: text("message").notNull(),
+  type: text("type").notNull(), // maintenance, payment, announcement, system
+  status: text("status").notNull().default("unread"), // unread, read
+  priority: text("priority").notNull().default("medium"), // low, medium, high, urgent
+  actionUrl: text("action_url"),
+  metadata: json("metadata"), // Additional data for the notification
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  readAt: timestamp("read_at"),
+});
+
+export const insertNotificationSchema = createInsertSchema(notifications).omit({ 
+  id: true,
+  createdAt: true,
+  readAt: true
+});
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+export type Notification = typeof notifications.$inferSelect;
+
 // ============= Settings =============
 export const settings = pgTable("settings", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -428,3 +474,25 @@ export const insertSettingsSchema = createInsertSchema(settings).omit({
 });
 export type InsertSettings = z.infer<typeof insertSettingsSchema>;
 export type Settings = typeof settings.$inferSelect;
+
+// ============= Audit Logs =============
+export const auditLogs = pgTable("audit_logs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").references(() => users.id),
+  action: text("action").notNull(), // CREATE, UPDATE, DELETE, LOGIN, LOGOUT, VIEW, EXPORT
+  entityType: text("entity_type").notNull(), // user, property, tenant, maintenance_request, transaction, etc.
+  entityId: text("entity_id"),
+  oldValues: json("old_values"),
+  newValues: json("new_values"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  metadata: json("metadata"), // Additional context (filters used, export format, etc.)
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ 
+  id: true,
+  createdAt: true
+});
+export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+export type AuditLog = typeof auditLogs.$inferSelect;

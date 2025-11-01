@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { TenantCard } from "@/components/TenantCard";
+import { FileUpload } from "@/components/FileUpload";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -26,13 +27,13 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-import { Plus, Search, Calendar } from "lucide-react";
+import { Plus, Search, Calendar, FileText } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertTenantSchema, type Tenant, type Unit, type Transaction } from "@shared/schema";
+import { insertTenantSchema, type Tenant, type Unit, type Transaction, type Document } from "@shared/schema";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
 import { CalendarIcon } from "lucide-react";

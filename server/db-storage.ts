@@ -20,6 +20,9 @@ import {
   vendors,
   settings,
   passwordResetTokens,
+  documents,
+  notifications,
+  auditLogs,
   type Property, type InsertProperty,
   type Unit, type InsertUnit,
   type Owner, type InsertOwner,
@@ -39,7 +42,10 @@ import {
   type DenrDocument, type InsertDenrDocument,
   type Vendor, type InsertVendor,
   type Settings, type InsertSettings,
-  type PasswordResetToken, type InsertPasswordResetToken
+  type PasswordResetToken, type InsertPasswordResetToken,
+  type Document, type InsertDocument,
+  type Notification, type InsertNotification,
+  type AuditLog, type InsertAuditLog
 } from "@shared/schema";
 import { eq, desc, and, sql, or, lt } from "drizzle-orm";
 import { IStorage } from "./storage";
@@ -900,5 +906,276 @@ export class PgStorage implements IStorage {
     } else {
       return await this.createSettings({ ...settingsData, userId } as InsertSettings);
     }
+  }
+
+  // Documents
+  async createDocument(document: InsertDocument): Promise<Document> {
+    const [result] = await db.insert(documents).values(document).returning();
+    return result;
+  }
+
+  async getDocumentById(id: string): Promise<Document | null> {
+    const [result] = await db.select().from(documents).where(eq(documents.id, id));
+    return result || null;
+  }
+
+  async getAllDocuments(): Promise<Document[]> {
+    return db.select()
+      .from(documents)
+      .orderBy(desc(documents.createdAt));
+  }
+
+  async getDocumentsByEntity(entityType: string, entityId: string): Promise<Document[]> {
+    return db.select()
+      .from(documents)
+      .where(and(
+        eq(documents.entityType, entityType),
+        eq(documents.entityId, entityId)
+      ))
+      .orderBy(desc(documents.createdAt));
+  }
+
+  async getDocumentsByPropertyId(propertyId: string): Promise<Document[]> {
+    return db.select()
+      .from(documents)
+      .where(eq(documents.propertyId, propertyId))
+      .orderBy(desc(documents.createdAt));
+  }
+
+  async getDocumentsByCategory(category: string): Promise<Document[]> {
+    return db.select()
+      .from(documents)
+      .where(eq(documents.category, category))
+      .orderBy(desc(documents.createdAt));
+  }
+
+  async getDocumentsByUploadedBy(userId: string): Promise<Document[]> {
+    return db.select()
+      .from(documents)
+      .where(eq(documents.uploadedBy, userId))
+      .orderBy(desc(documents.createdAt));
+  }
+
+  async updateDocument(id: string, document: Partial<InsertDocument>): Promise<Document | null> {
+    const [result] = await db.update(documents).set(document).where(eq(documents.id, id)).returning();
+    return result || null;
+  }
+
+  async deleteDocument(id: string): Promise<boolean> {
+    const result = await db.delete(documents).where(eq(documents.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  // Notifications
+  async createNotification(notification: InsertNotification): Promise<Notification> {
+    const [result] = await db.insert(notifications).values(notification).returning();
+    return result;
+  }
+
+  async createNotifications(notificationsList: InsertNotification[]): Promise<Notification[]> {
+    if (notificationsList.length === 0) return [];
+    const results = await db.insert(notifications).values(notificationsList).returning();
+    return results;
+  }
+
+  async getNotificationById(id: string): Promise<Notification | null> {
+    const [result] = await db.select().from(notifications).where(eq(notifications.id, id));
+    return result || null;
+  }
+
+  async getNotificationsByUserId(userId: string, limit = 20, offset = 0): Promise<Notification[]> {
+    return db.select()
+      .from(notifications)
+      .where(eq(notifications.userId, userId))
+      .orderBy(desc(notifications.createdAt))
+      .limit(limit)
+      .offset(offset);
+  }
+
+  async getRecentNotificationsByUserId(userId: string, limit = 10): Promise<Notification[]> {
+    return db.select()
+      .from(notifications)
+      .where(eq(notifications.userId, userId))
+      .orderBy(desc(notifications.createdAt))
+      .limit(limit);
+  }
+
+  async getUnreadCountByUserId(userId: string): Promise<number> {
+    const [result] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(notifications)
+      .where(and(
+        eq(notifications.userId, userId),
+        eq(notifications.status, "unread")
+      ));
+    return result?.count ?? 0;
+  }
+
+  async markNotificationAsRead(id: string): Promise<Notification | null> {
+    const [result] = await db.update(notifications)
+      .set({ 
+        status: "read",
+        readAt: new Date()
+      })
+      .where(eq(notifications.id, id))
+      .returning();
+    return result || null;
+  }
+
+  async markAllNotificationsAsRead(userId: string): Promise<number> {
+    const result = await db.update(notifications)
+      .set({ 
+        status: "read",
+        readAt: new Date()
+      })
+      .where(and(
+        eq(notifications.userId, userId),
+        eq(notifications.status, "unread")
+      ));
+    return result.rowCount ?? 0;
+  }
+
+  async deleteNotification(id: string): Promise<boolean> {
+    const result = await db.delete(notifications).where(eq(notifications.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  // Audit Logs
+  async createAuditLog(log: InsertAuditLog): Promise<AuditLog> {
+    const [result] = await db.insert(auditLogs).values(log).returning();
+    return result;
+  }
+
+  async getAuditLogById(id: string): Promise<AuditLog | null> {
+    const [result] = await db.select().from(auditLogs).where(eq(auditLogs.id, id));
+    return result || null;
+  }
+
+  async getAuditLogs(filters?: {
+    userId?: string;
+    action?: string;
+    entityType?: string;
+    entityId?: string;
+    propertyId?: string;
+    startDate?: Date;
+    endDate?: Date;
+    limit?: number;
+    offset?: number;
+  }): Promise<AuditLog[]> {
+    let query = db.select().from(auditLogs);
+    const conditions = [];
+
+    if (filters?.userId) {
+      conditions.push(eq(auditLogs.userId, filters.userId));
+    }
+    if (filters?.action) {
+      conditions.push(eq(auditLogs.action, filters.action));
+    }
+    if (filters?.entityType) {
+      conditions.push(eq(auditLogs.entityType, filters.entityType));
+    }
+    if (filters?.entityId) {
+      conditions.push(eq(auditLogs.entityId, filters.entityId));
+    }
+    if (filters?.startDate) {
+      conditions.push(sql`${auditLogs.createdAt} >= ${filters.startDate}`);
+    }
+    if (filters?.endDate) {
+      conditions.push(sql`${auditLogs.createdAt} <= ${filters.endDate}`);
+    }
+
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions)) as any;
+    }
+
+    query = query.orderBy(desc(auditLogs.createdAt)) as any;
+
+    if (filters?.limit !== undefined) {
+      query = query.limit(filters.limit) as any;
+    }
+    if (filters?.offset !== undefined) {
+      query = query.offset(filters.offset) as any;
+    }
+
+    return query;
+  }
+
+  async getAuditLogStats(filters?: {
+    propertyId?: string;
+    startDate?: Date;
+    endDate?: Date;
+  }): Promise<{
+    totalActions: number;
+    actionsByType: Record<string, number>;
+    actionsByUser: Array<{ userId: string; userName: string; count: number }>;
+    recentActions: AuditLog[];
+  }> {
+    const conditions = [];
+    
+    if (filters?.startDate) {
+      conditions.push(sql`${auditLogs.createdAt} >= ${filters.startDate}`);
+    }
+    if (filters?.endDate) {
+      conditions.push(sql`${auditLogs.createdAt} <= ${filters.endDate}`);
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    // Get total actions
+    const [totalResult] = await db.select({ 
+      count: sql<number>`count(*)::int` 
+    })
+    .from(auditLogs)
+    .where(whereClause);
+
+    const totalActions = totalResult?.count ?? 0;
+
+    // Get actions by type
+    const actionsByTypeResults = await db.select({
+      action: auditLogs.action,
+      count: sql<number>`count(*)::int`
+    })
+    .from(auditLogs)
+    .where(whereClause)
+    .groupBy(auditLogs.action);
+
+    const actionsByType: Record<string, number> = {};
+    for (const row of actionsByTypeResults) {
+      actionsByType[row.action] = row.count;
+    }
+
+    // Get actions by user with names
+    const actionsByUserResults = await db.select({
+      userId: auditLogs.userId,
+      userName: users.fullName,
+      count: sql<number>`count(*)::int`
+    })
+    .from(auditLogs)
+    .leftJoin(users, eq(auditLogs.userId, users.id))
+    .where(whereClause)
+    .groupBy(auditLogs.userId, users.fullName)
+    .orderBy(desc(sql`count(*)`))
+    .limit(10);
+
+    const actionsByUser = actionsByUserResults.map(row => ({
+      userId: row.userId ?? '',
+      userName: row.userName ?? 'System',
+      count: row.count
+    }));
+
+    // Get recent actions
+    let recentQuery = db.select().from(auditLogs);
+    if (whereClause) {
+      recentQuery = recentQuery.where(whereClause) as any;
+    }
+    const recentActions = await recentQuery
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(10);
+
+    return {
+      totalActions,
+      actionsByType,
+      actionsByUser,
+      recentActions
+    };
   }
 }

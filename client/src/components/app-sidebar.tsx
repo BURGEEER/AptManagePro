@@ -14,6 +14,7 @@ import {
   Receipt,
   UserCheck,
   ShieldCheck,
+  Shield,
 } from "lucide-react";
 import {
   Sidebar,
@@ -105,9 +106,21 @@ const getAllMenuItems = (userRole?: string) => {
       roles: ['IT', 'ADMIN'],
     },
     {
+      title: "Documents",
+      url: "/documents",
+      icon: FileText,
+      roles: ['IT', 'ADMIN', 'TENANT'],
+    },
+    {
       title: "Vendors",
       url: "/vendors",
       icon: Briefcase,
+      roles: ['IT', 'ADMIN'],
+    },
+    {
+      title: "Audit Logs",
+      url: "/audit-logs",
+      icon: Shield,
       roles: ['IT', 'ADMIN'],
     },
   ];

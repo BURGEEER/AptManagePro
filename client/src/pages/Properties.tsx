@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { PropertyCard } from "@/components/PropertyCard";
+import { FileUpload } from "@/components/FileUpload";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, FileText, Paperclip } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
-import { type Property } from "@shared/schema";
+import { type Property, type Document } from "@shared/schema";
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -295,6 +297,26 @@ export default function Properties() {
                     </FormItem>
                   )}
                 />
+                {/* Document Upload Section */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Property Documents (Optional)</label>
+                  <p className="text-xs text-muted-foreground">
+                    Upload contracts, permits, or other property-related documents
+                  </p>
+                  <FileUpload
+                    entityType="property"
+                    entityId={`temp_property_${Date.now()}`} // Temporary ID until property is created
+                    category="contract"
+                    isPrivate={true}
+                    onUploadSuccess={() => {
+                      toast({
+                        title: "Document uploaded",
+                        description: "Document has been attached to this property",
+                      });
+                    }}
+                    maxFiles={10}
+                  />
+                </div>
                 <div className="flex justify-end gap-2 pt-4">
                   <Button
                     type="button"

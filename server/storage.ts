@@ -8,7 +8,9 @@ import {
   type DenrDocument, type InsertDenrDocument,
   type Vendor, type InsertVendor,
   type Settings, type InsertSettings,
-  type PasswordResetToken, type InsertPasswordResetToken
+  type PasswordResetToken, type InsertPasswordResetToken,
+  type Notification, type InsertNotification,
+  type AuditLog, type InsertAuditLog
 } from "@shared/schema";
 import { PgStorage } from "./db-storage";
 
@@ -87,6 +89,42 @@ export interface IStorage {
   getSettingsByUserId(userId: string): Promise<Settings | null>;
   updateSettings(id: string, settings: Partial<InsertSettings>): Promise<Settings | null>;
   upsertSettings(userId: string, settings: Partial<InsertSettings>): Promise<Settings>;
+
+  // Notification methods
+  createNotification(notification: InsertNotification): Promise<Notification>;
+  createNotifications(notifications: InsertNotification[]): Promise<Notification[]>;
+  getNotificationsByUserId(userId: string, limit?: number, offset?: number): Promise<Notification[]>;
+  getNotificationById(id: string): Promise<Notification | null>;
+  getUnreadCountByUserId(userId: string): Promise<number>;
+  markNotificationAsRead(id: string): Promise<Notification | null>;
+  markAllNotificationsAsRead(userId: string): Promise<number>;
+  deleteNotification(id: string): Promise<boolean>;
+  getRecentNotificationsByUserId(userId: string, limit?: number): Promise<Notification[]>;
+
+  // Audit Log methods
+  createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
+  getAuditLogs(filters?: {
+    userId?: string;
+    action?: string;
+    entityType?: string;
+    entityId?: string;
+    propertyId?: string;
+    startDate?: Date;
+    endDate?: Date;
+    limit?: number;
+    offset?: number;
+  }): Promise<AuditLog[]>;
+  getAuditLogById(id: string): Promise<AuditLog | null>;
+  getAuditLogStats(filters?: {
+    propertyId?: string;
+    startDate?: Date;
+    endDate?: Date;
+  }): Promise<{
+    totalActions: number;
+    actionsByType: Record<string, number>;
+    actionsByUser: Array<{ userId: string; userName: string; count: number }>;
+    recentActions: AuditLog[];
+  }>;
 }
 
 // Use PostgreSQL storage implementation

@@ -5,15 +5,19 @@ import {
   insertMaintenanceRequestSchema, insertTransactionSchema, insertCommunicationSchema, 
   insertAnnouncementSchema, insertUtilityReadingSchema, insertOwnerUnitSchema,
   insertParkingSlotSchema, insertAccountPayableSchema, insertUserSchema, insertReportSchema,
-  insertProjectSchema, insertContractorSchema, insertDenrDocumentSchema,
+  insertProjectSchema, insertContractorSchema, insertDenrDocumentSchema, insertDocumentSchema,
   type Property, type Unit, type Owner, type Tenant, type MaintenanceRequest, 
   type Transaction, type Communication, type Announcement, type UtilityReading,
   type OwnerUnit, type ParkingSlot, type AccountPayable, type User, type Report,
-  type Project, type Contractor, type DenrDocument
+  type Project, type Contractor, type DenrDocument, type Document, type AuditLog
 } from "@shared/schema";
 import { PgStorage } from "./db-storage";
 import { z } from "zod";
 import crypto from "crypto";
+import multer from "multer";
+import path from "path";
+import fs from "fs/promises";
+import { auditLog, captureOriginalBody, auditAuthEvent } from "./middleware/audit";
 
 const storage = new PgStorage();
 
@@ -41,6 +45,13 @@ export function requireRole(roles: string[]) {
 }
 
 export function setupRoutes(app: Express) {
+  // Apply audit logging middleware
+  app.use(captureOriginalBody);
+  app.use(auditLog({
+    skipRoutes: ['/api/auth/me', '/api/notifications'],
+    includeGetRequests: false
+  }));
+
   // ============= Authentication Routes =============
   app.post("/api/auth/login", express.json(), async (req, res) => {
     try {
@@ -48,11 +59,15 @@ export function setupRoutes(app: Express) {
       const user = await storage.getUserByUsername(username);
       
       if (!user || !user.isActive) {
+        // Log failed login attempt
+        await auditAuthEvent(undefined, 'LOGIN_FAILED', req, { username });
         return res.status(401).json({ error: "Invalid credentials" });
       }
       
       const isValid = await storage.verifyPassword(user.password, password);
       if (!isValid) {
+        // Log failed login attempt
+        await auditAuthEvent(user.id, 'LOGIN_FAILED', req, { username });
         return res.status(401).json({ error: "Invalid credentials" });
       }
       
@@ -63,6 +78,9 @@ export function setupRoutes(app: Express) {
       req.session!.userId = user.id;
       req.session!.role = user.role;
       
+      // Log successful login
+      await auditAuthEvent(user.id, 'LOGIN', req, { username, role: user.role });
+      
       // Return user without password
       const { password: _, ...userWithoutPassword } = user;
       res.json({ user: userWithoutPassword });
@@ -72,8 +90,14 @@ export function setupRoutes(app: Express) {
     }
   });
 
-  app.post("/api/auth/logout", (req, res) => {
+  app.post("/api/auth/logout", async (req, res) => {
+    const userId = req.session?.userId;
     const sessionId = req.sessionID;
+    
+    // Log logout event before destroying session
+    if (userId) {
+      await auditAuthEvent(userId, 'LOGOUT', req);
+    }
     
     // Properly destroy the session
     req.session?.destroy((err) => {
@@ -443,6 +467,140 @@ export function setupRoutes(app: Express) {
     } catch (error) {
       console.error("Settings update error:", error);
       res.status(500).json({ error: "Failed to update settings" });
+    }
+  });
+  
+  // ============= Notifications =============
+  app.get("/api/notifications", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      
+      const limit = parseInt(req.query.limit as string) || 20;
+      const offset = parseInt(req.query.offset as string) || 0;
+      
+      const notifications = await storage.getNotificationsByUserId(userId, limit, offset);
+      res.json(notifications);
+    } catch (error) {
+      console.error("Notifications fetch error:", error);
+      res.status(500).json({ error: "Failed to fetch notifications" });
+    }
+  });
+  
+  app.get("/api/notifications/unread-count", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      
+      const count = await storage.getUnreadCountByUserId(userId);
+      res.json({ count });
+    } catch (error) {
+      console.error("Unread count fetch error:", error);
+      res.status(500).json({ error: "Failed to fetch unread count" });
+    }
+  });
+  
+  app.get("/api/notifications/recent", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      
+      const limit = parseInt(req.query.limit as string) || 5;
+      const notifications = await storage.getRecentNotificationsByUserId(userId, limit);
+      res.json(notifications);
+    } catch (error) {
+      console.error("Recent notifications fetch error:", error);
+      res.status(500).json({ error: "Failed to fetch recent notifications" });
+    }
+  });
+  
+  app.patch("/api/notifications/:id/read", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      
+      // Verify the notification belongs to the user
+      const notification = await storage.getNotificationById(req.params.id);
+      if (!notification || notification.userId !== userId) {
+        return res.status(404).json({ error: "Notification not found" });
+      }
+      
+      const updated = await storage.markNotificationAsRead(req.params.id);
+      res.json(updated);
+    } catch (error) {
+      console.error("Mark notification read error:", error);
+      res.status(500).json({ error: "Failed to mark notification as read" });
+    }
+  });
+  
+  app.patch("/api/notifications/mark-all-read", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      
+      const count = await storage.markAllNotificationsAsRead(userId);
+      res.json({ updated: count });
+    } catch (error) {
+      console.error("Mark all notifications read error:", error);
+      res.status(500).json({ error: "Failed to mark all notifications as read" });
+    }
+  });
+  
+  app.delete("/api/notifications/:id", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      
+      // Verify the notification belongs to the user
+      const notification = await storage.getNotificationById(req.params.id);
+      if (!notification || notification.userId !== userId) {
+        return res.status(404).json({ error: "Notification not found" });
+      }
+      
+      const deleted = await storage.deleteNotification(req.params.id);
+      res.json({ success: deleted });
+    } catch (error) {
+      console.error("Delete notification error:", error);
+      res.status(500).json({ error: "Failed to delete notification" });
+    }
+  });
+  
+  // Internal endpoint to create notifications (not exposed to frontend)
+  app.post("/api/notifications", requireRole(["IT", "ADMIN"]), express.json(), async (req, res) => {
+    try {
+      const { userId, title, message, type, priority, actionUrl, metadata } = req.body;
+      
+      if (!userId || !title || !message || !type) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+      
+      const notification = await storage.createNotification({
+        userId,
+        title,
+        message,
+        type,
+        priority: priority || "medium",
+        actionUrl: actionUrl || null,
+        metadata: metadata || null,
+        status: "unread",
+      });
+      
+      res.status(201).json(notification);
+    } catch (error) {
+      console.error("Create notification error:", error);
+      res.status(500).json({ error: "Failed to create notification" });
     }
   });
   
@@ -1009,6 +1167,28 @@ export function setupRoutes(app: Express) {
     try {
       const parsed = insertMaintenanceRequestSchema.parse(req.body);
       const request = await storage.createMaintenanceRequest(parsed);
+      
+      // Create notification for admins about new maintenance request
+      const admins = await storage.getUsersByRole("ADMIN");
+      const its = await storage.getUsersByRole("IT");
+      const unit = await storage.getUnitById(request.unitId);
+      
+      const notificationUsers = [...admins, ...its];
+      const notifications = notificationUsers.map(user => ({
+        userId: user.id,
+        title: "New Maintenance Request",
+        message: `A new ${request.priority} priority maintenance request has been created for unit ${unit?.unitNumber || "Unknown"}`,
+        type: "maintenance" as const,
+        priority: request.priority === "urgent" ? "urgent" as const : "medium" as const,
+        actionUrl: `/maintenance`,
+        metadata: { requestId: request.id, unitId: request.unitId },
+        status: "unread" as const,
+      }));
+      
+      if (notifications.length > 0) {
+        await storage.createNotifications(notifications);
+      }
+      
       res.status(201).json(request);
     } catch (error: any) {
       if (error.name === "ZodError") {
@@ -1020,10 +1200,39 @@ export function setupRoutes(app: Express) {
 
   app.patch("/api/maintenance-requests/:id", express.json(), async (req, res) => {
     try {
+      const existingRequest = await storage.getMaintenanceRequestById(req.params.id);
+      if (!existingRequest) {
+        return res.status(404).json({ error: "Maintenance request not found" });
+      }
+      
       const request = await storage.updateMaintenanceRequest(req.params.id, req.body);
       if (!request) {
         return res.status(404).json({ error: "Maintenance request not found" });
       }
+      
+      // Notify tenant if status changed
+      if (req.body.status && req.body.status !== existingRequest.status && request.tenantId) {
+        const tenant = await storage.getTenantById(request.tenantId);
+        if (tenant) {
+          // Find the user account for this tenant
+          const users = await storage.getAllUsers();
+          const tenantUser = users.find(u => u.email === tenant.email);
+          
+          if (tenantUser) {
+            await storage.createNotification({
+              userId: tenantUser.id,
+              title: "Maintenance Request Updated",
+              message: `Your maintenance request has been updated to: ${request.status}`,
+              type: "maintenance",
+              priority: request.status === "resolved" ? "low" : "medium",
+              actionUrl: `/maintenance`,
+              metadata: { requestId: request.id, status: request.status },
+              status: "unread",
+            });
+          }
+        }
+      }
+      
       res.json(request);
     } catch (error) {
       res.status(500).json({ error: "Failed to update maintenance request" });
@@ -1595,6 +1804,41 @@ export function setupRoutes(app: Express) {
     try {
       const parsed = insertAnnouncementSchema.parse(req.body);
       const announcement = await storage.createAnnouncement(parsed);
+      
+      // Create notifications based on target audience
+      let targetUsers: User[] = [];
+      
+      if (announcement.targetAudience === "all") {
+        targetUsers = await storage.getAllUsers();
+      } else if (announcement.targetAudience === "owners") {
+        targetUsers = await storage.getUsersByRole("ADMIN");
+        const its = await storage.getUsersByRole("IT");
+        targetUsers = [...targetUsers, ...its];
+      } else if (announcement.targetAudience === "tenants") {
+        targetUsers = await storage.getUsersByRole("TENANT");
+      }
+      
+      // Filter users by property if announcement is property-specific
+      if (announcement.propertyId) {
+        targetUsers = targetUsers.filter(u => !u.propertyId || u.propertyId === announcement.propertyId);
+      }
+      
+      // Create notifications for target users
+      const notifications = targetUsers.map(user => ({
+        userId: user.id,
+        title: "New Announcement",
+        message: announcement.title,
+        type: "announcement" as const,
+        priority: announcement.priority as "low" | "medium" | "high" | "urgent",
+        actionUrl: `/`,
+        metadata: { announcementId: announcement.id, category: announcement.category },
+        status: "unread" as const,
+      }));
+      
+      if (notifications.length > 0) {
+        await storage.createNotifications(notifications);
+      }
+      
       res.status(201).json(announcement);
     } catch (error: any) {
       if (error.name === "ZodError") {
@@ -3214,6 +3458,442 @@ export function setupRoutes(app: Express) {
       }
     } catch (error) {
       res.status(500).json({ error: "Failed to delete vendor" });
+    }
+  });
+
+  // ============= Document Management Routes =============
+  
+  // Configure multer for file uploads
+  const uploadStorage = multer.memoryStorage();
+  const upload = multer({
+    storage: uploadStorage,
+    limits: {
+      fileSize: 10 * 1024 * 1024, // 10MB limit
+    },
+    fileFilter: (req, file, cb) => {
+      // Allowed file types
+      const allowedTypes = [
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'image/png',
+        'image/jpeg',
+        'image/jpg'
+      ];
+      
+      if (allowedTypes.includes(file.mimetype)) {
+        cb(null, true);
+      } else {
+        cb(new Error('Invalid file type. Only PDF, DOC, DOCX, XLS, XLSX, PNG, JPG, and JPEG files are allowed.'));
+      }
+    }
+  });
+
+  // POST /api/documents/upload - Handle file upload to object storage
+  app.post("/api/documents/upload", requireAuth, upload.single('file'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file provided" });
+      }
+
+      const currentUser = req.session!.userId;
+      const { category, entityType, entityId, isPrivate, propertyId } = req.body;
+      
+      // Validate required fields
+      if (!category || !entityType || !entityId) {
+        return res.status(400).json({ error: "Missing required fields: category, entityType, entityId" });
+      }
+
+      // Determine storage path based on privacy setting
+      const bucketId = 'replit-objstore-f03cc47e-4647-48c7-a05a-85bd3b031fca';
+      const isPrivateFile = isPrivate === 'true' || isPrivate === true;
+      const baseDir = isPrivateFile 
+        ? `/replit-objstore-f03cc47e-4647-48c7-a05a-85bd3b031fca/.private`
+        : `/replit-objstore-f03cc47e-4647-48c7-a05a-85bd3b031fca/public`;
+      
+      // Generate unique filename
+      const timestamp = Date.now();
+      const randomString = crypto.randomBytes(8).toString('hex');
+      const fileExtension = path.extname(req.file.originalname);
+      const fileName = `${entityType}_${entityId}_${timestamp}_${randomString}${fileExtension}`;
+      const filePath = path.join(baseDir, category, fileName);
+      
+      // Create directory if it doesn't exist
+      const dirPath = path.dirname(filePath);
+      await fs.mkdir(dirPath, { recursive: true });
+      
+      // Write file to object storage
+      await fs.writeFile(filePath, req.file.buffer);
+      
+      // Create document record in database
+      const documentData = {
+        name: req.file.originalname,
+        fileUrl: filePath,
+        fileType: req.file.mimetype,
+        fileSize: req.file.size,
+        uploadedBy: currentUser!,
+        propertyId: propertyId || null,
+        category,
+        entityType,
+        entityId,
+        isPrivate: isPrivateFile,
+      };
+      
+      const document = await storage.createDocument(documentData);
+      
+      res.status(201).json({
+        success: true,
+        document,
+        message: "File uploaded successfully"
+      });
+    } catch (error: any) {
+      console.error("Upload error:", error);
+      res.status(500).json({ error: error.message || "Failed to upload file" });
+    }
+  });
+
+  // GET /api/documents - List documents with filtering
+  app.get("/api/documents", requireAuth, async (req, res) => {
+    try {
+      const { category, entityType, entityId, propertyId } = req.query;
+      const currentUser = req.session!.user;
+      
+      let documents: Document[];
+      
+      if (entityType && entityId) {
+        documents = await storage.getDocumentsByEntity(
+          entityType as string, 
+          entityId as string
+        );
+      } else if (propertyId) {
+        documents = await storage.getDocumentsByPropertyId(propertyId as string);
+      } else if (category) {
+        documents = await storage.getDocumentsByCategory(category as string);
+      } else {
+        documents = await storage.getAllDocuments();
+      }
+      
+      // Filter documents based on user role
+      if (currentUser?.role === "ADMIN" && currentUser.propertyId) {
+        documents = documents.filter(doc => 
+          doc.propertyId === currentUser.propertyId
+        );
+      } else if (currentUser?.role === "TENANT") {
+        // Tenants can only see their own documents or public documents
+        documents = documents.filter(doc => 
+          doc.uploadedBy === currentUser.id || !doc.isPrivate
+        );
+      }
+      
+      res.json(documents);
+    } catch (error) {
+      console.error("Error fetching documents:", error);
+      res.status(500).json({ error: "Failed to fetch documents" });
+    }
+  });
+
+  // GET /api/documents/:id - Get specific document details
+  app.get("/api/documents/:id", requireAuth, async (req, res) => {
+    try {
+      const document = await storage.getDocumentById(req.params.id);
+      
+      if (!document) {
+        return res.status(404).json({ error: "Document not found" });
+      }
+      
+      const currentUser = req.session!.user;
+      
+      // Check access permissions
+      if (currentUser?.role === "ADMIN" && currentUser.propertyId) {
+        if (document.propertyId !== currentUser.propertyId) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+      } else if (currentUser?.role === "TENANT") {
+        if (document.uploadedBy !== currentUser?.id && document.isPrivate) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+      }
+      
+      res.json(document);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch document" });
+    }
+  });
+
+  // DELETE /api/documents/:id - Delete document
+  app.delete("/api/documents/:id", requireAuth, async (req, res) => {
+    try {
+      const document = await storage.getDocumentById(req.params.id);
+      
+      if (!document) {
+        return res.status(404).json({ error: "Document not found" });
+      }
+      
+      const currentUser = req.session!.user;
+      
+      // Check delete permissions
+      if (currentUser?.role === "TENANT" && document.uploadedBy !== currentUser.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      if (currentUser?.role === "ADMIN" && currentUser.propertyId) {
+        if (document.propertyId !== currentUser.propertyId) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+      }
+      
+      // Delete the file from storage
+      try {
+        await fs.unlink(document.fileUrl);
+      } catch (err) {
+        console.error("Error deleting file:", err);
+        // Continue even if file deletion fails
+      }
+      
+      // Delete the database record
+      const success = await storage.deleteDocument(req.params.id);
+      
+      if (success) {
+        res.json({ message: "Document deleted successfully" });
+      } else {
+        res.status(500).json({ error: "Failed to delete document" });
+      }
+    } catch (error) {
+      console.error("Delete error:", error);
+      res.status(500).json({ error: "Failed to delete document" });
+    }
+  });
+
+  // GET /api/documents/download/:id - Download document
+  app.get("/api/documents/download/:id", requireAuth, async (req, res) => {
+    try {
+      const document = await storage.getDocumentById(req.params.id);
+      
+      if (!document) {
+        return res.status(404).json({ error: "Document not found" });
+      }
+      
+      const currentUser = req.session!.user;
+      
+      // Check download permissions
+      if (currentUser?.role === "ADMIN" && currentUser.propertyId) {
+        if (document.propertyId !== currentUser.propertyId) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+      } else if (currentUser?.role === "TENANT") {
+        if (document.uploadedBy !== currentUser?.id && document.isPrivate) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+      }
+      
+      // Check if file exists
+      try {
+        await fs.access(document.fileUrl);
+      } catch {
+        return res.status(404).json({ error: "File not found" });
+      }
+      
+      // Read and send the file
+      const fileBuffer = await fs.readFile(document.fileUrl);
+      
+      res.set({
+        'Content-Type': document.fileType,
+        'Content-Disposition': `attachment; filename="${document.name}"`,
+        'Content-Length': document.fileSize.toString(),
+      });
+      
+      res.send(fileBuffer);
+    } catch (error) {
+      console.error("Download error:", error);
+      res.status(500).json({ error: "Failed to download document" });
+    }
+  });
+
+  // ============= Audit Log Routes =============
+  // GET /api/audit-logs - List audit logs with filtering
+  app.get("/api/audit-logs", requireRole(["IT", "ADMIN"]), async (req, res) => {
+    try {
+      const currentUser = req.session!.user;
+      const filters: any = {};
+
+      // Parse query parameters
+      if (req.query.userId) filters.userId = req.query.userId as string;
+      if (req.query.action) filters.action = req.query.action as string;
+      if (req.query.entityType) filters.entityType = req.query.entityType as string;
+      if (req.query.entityId) filters.entityId = req.query.entityId as string;
+      if (req.query.startDate) filters.startDate = new Date(req.query.startDate as string);
+      if (req.query.endDate) filters.endDate = new Date(req.query.endDate as string);
+      
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
+      const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
+      
+      filters.limit = limit;
+      filters.offset = offset;
+
+      // If ADMIN, only show logs for their property
+      if (currentUser?.role === "ADMIN" && currentUser.propertyId) {
+        filters.propertyId = currentUser.propertyId;
+      }
+
+      const logs = await storage.getAuditLogs(filters);
+      
+      // Enrich logs with user names
+      const enrichedLogs = await Promise.all(logs.map(async (log) => {
+        let userName = 'System';
+        if (log.userId) {
+          const user = await storage.getUser(log.userId);
+          userName = user?.fullName || user?.username || 'Unknown User';
+        }
+        return { ...log, userName };
+      }));
+
+      res.json(enrichedLogs);
+    } catch (error) {
+      console.error("Error fetching audit logs:", error);
+      res.status(500).json({ error: "Failed to fetch audit logs" });
+    }
+  });
+
+  // GET /api/audit-logs/stats - Get audit log statistics
+  app.get("/api/audit-logs/stats", requireRole(["IT", "ADMIN"]), async (req, res) => {
+    try {
+      const currentUser = req.session!.user;
+      const filters: any = {};
+
+      if (req.query.startDate) filters.startDate = new Date(req.query.startDate as string);
+      if (req.query.endDate) filters.endDate = new Date(req.query.endDate as string);
+      
+      // If ADMIN, only show stats for their property
+      if (currentUser?.role === "ADMIN" && currentUser.propertyId) {
+        filters.propertyId = currentUser.propertyId;
+      }
+
+      const stats = await storage.getAuditLogStats(filters);
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching audit log stats:", error);
+      res.status(500).json({ error: "Failed to fetch audit log statistics" });
+    }
+  });
+
+  // GET /api/audit-logs/export - Export audit logs to CSV
+  app.get("/api/audit-logs/export", requireRole(["IT", "ADMIN"]), async (req, res) => {
+    try {
+      const currentUser = req.session!.user;
+      const filters: any = {};
+
+      // Parse query parameters
+      if (req.query.userId) filters.userId = req.query.userId as string;
+      if (req.query.action) filters.action = req.query.action as string;
+      if (req.query.entityType) filters.entityType = req.query.entityType as string;
+      if (req.query.entityId) filters.entityId = req.query.entityId as string;
+      if (req.query.startDate) filters.startDate = new Date(req.query.startDate as string);
+      if (req.query.endDate) filters.endDate = new Date(req.query.endDate as string);
+
+      // If ADMIN, only export logs for their property
+      if (currentUser?.role === "ADMIN" && currentUser.propertyId) {
+        filters.propertyId = currentUser.propertyId;
+      }
+
+      const logs = await storage.getAuditLogs(filters);
+
+      // Enrich logs with user names
+      const enrichedLogs = await Promise.all(logs.map(async (log) => {
+        let userName = 'System';
+        if (log.userId) {
+          const user = await storage.getUser(log.userId);
+          userName = user?.fullName || user?.username || 'Unknown User';
+        }
+        return { ...log, userName };
+      }));
+
+      // Create CSV content
+      const headers = [
+        'Date/Time',
+        'User',
+        'Action',
+        'Entity Type',
+        'Entity ID',
+        'IP Address',
+        'User Agent',
+        'Old Values',
+        'New Values',
+        'Metadata'
+      ];
+
+      const csvRows = [headers.join(',')];
+
+      for (const log of enrichedLogs) {
+        const row = [
+          new Date(log.createdAt).toISOString(),
+          log.userName,
+          log.action,
+          log.entityType,
+          log.entityId || '',
+          log.ipAddress || '',
+          log.userAgent || '',
+          log.oldValues ? JSON.stringify(log.oldValues) : '',
+          log.newValues ? JSON.stringify(log.newValues) : '',
+          log.metadata ? JSON.stringify(log.metadata) : ''
+        ];
+
+        // Escape values and wrap in quotes if they contain commas
+        const escapedRow = row.map(value => {
+          if (typeof value === 'string' && (value.includes(',') || value.includes('"') || value.includes('\n'))) {
+            return `"${value.replace(/"/g, '""')}"`;
+          }
+          return value;
+        });
+
+        csvRows.push(escapedRow.join(','));
+      }
+
+      const csv = csvRows.join('\n');
+      const fileName = `audit-logs-${new Date().toISOString().split('T')[0]}.csv`;
+
+      res.set({
+        'Content-Type': 'text/csv',
+        'Content-Disposition': `attachment; filename="${fileName}"`,
+        'Content-Length': Buffer.byteLength(csv).toString(),
+      });
+
+      res.send(csv);
+    } catch (error) {
+      console.error("Error exporting audit logs:", error);
+      res.status(500).json({ error: "Failed to export audit logs" });
+    }
+  });
+
+  // GET /api/audit-logs/:id - Get specific audit log
+  app.get("/api/audit-logs/:id", requireRole(["IT", "ADMIN"]), async (req, res) => {
+    try {
+      const log = await storage.getAuditLogById(req.params.id);
+      
+      if (!log) {
+        return res.status(404).json({ error: "Audit log not found" });
+      }
+      
+      const currentUser = req.session!.user;
+      
+      // If ADMIN, check if log is from their property (if applicable)
+      if (currentUser?.role === "ADMIN" && currentUser.propertyId) {
+        // Note: We'd need to enhance the audit log schema to include propertyId
+        // For now, ADMINs can see all logs related to their managed entities
+      }
+
+      // Enrich with user name
+      let userName = 'System';
+      if (log.userId) {
+        const user = await storage.getUser(log.userId);
+        userName = user?.fullName || user?.username || 'Unknown User';
+      }
+
+      res.json({ ...log, userName });
+    } catch (error) {
+      console.error("Error fetching audit log:", error);
+      res.status(500).json({ error: "Failed to fetch audit log" });
     }
   });
 }

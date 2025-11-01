@@ -7,6 +7,7 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { AppSidebar } from "@/components/app-sidebar";
+import { NotificationBell } from "@/components/NotificationBell";
 import { useEffect } from "react";
 import Dashboard from "@/pages/Dashboard";
 import Properties from "@/pages/Properties";
@@ -18,9 +19,12 @@ import Communications from "@/pages/Communications";
 import Transactions from "@/pages/Transactions";
 import Reports from "@/pages/Reports";
 import Documentation from "@/pages/Documentation";
+import Documents from "@/pages/Documents";
 import Users from "@/pages/Users";
 import Vendors from "@/pages/Vendors";
 import Settings from "@/pages/Settings";
+import Notifications from "@/pages/Notifications";
+import AuditLogs from "@/pages/AuditLogs";
 import Login from "@/pages/Login";
 import PasswordReset from "@/pages/PasswordReset";
 import NotFound from "@/pages/not-found";
@@ -93,6 +97,7 @@ function AuthenticatedLayout() {
               </span>
             </div>
             <div className="flex items-center gap-2">
+              <NotificationBell />
               <ThemeToggle />
               <Button 
                 variant="ghost" 
@@ -131,7 +136,10 @@ function Router() {
       <Route path="/transactions" component={Transactions} />
       <Route path="/reports" component={Reports} />
       <Route path="/documentation" component={Documentation} />
+      <Route path="/documents" component={Documents} />
+      <Route path="/audit-logs" component={AuditLogs} />
       <Route path="/settings" component={Settings} />
+      <Route path="/notifications" component={Notifications} />
       <Route component={NotFound} />
     </Switch>
   );

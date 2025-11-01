@@ -4,14 +4,15 @@ import { PropertyCard } from "@/components/PropertyCard";
 import { AnnouncementCard } from "@/components/AnnouncementCard";
 import { RevenueChart } from "@/components/RevenueChart";
 import { OccupancyChart } from "@/components/OccupancyChart";
-import { Building2, Users, DollarSign, Wrench, Calendar, AlertCircle, Plus } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Building2, Users, DollarSign, Wrench, Calendar, AlertCircle, Plus, Shield, AlertTriangle, Activity } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useQuery } from "@tanstack/react-query";
-import type { Announcement, Property, MaintenanceRequest, Owner, Transaction, Tenant, Unit } from "@shared/schema";
+import { format } from "date-fns";
+import type { Announcement, Property, MaintenanceRequest, Owner, Transaction, Tenant, Unit, AuditLog } from "@shared/schema";
 import modernBuilding from "@assets/generated_images/Modern_apartment_building_exterior_f859cd14.png";
 import luxuryComplex from "@assets/generated_images/Luxury_apartment_complex_exterior_a666ca82.png";
 import urbanBuilding from "@assets/generated_images/Urban_apartment_building_facade_39768cdb.png";
@@ -74,6 +75,18 @@ export default function Dashboard() {
     enabled: !!currentUser && (currentUser?.role === "IT" || currentUser?.role === "ADMIN"),
   });
 
+  // Fetch recent audit logs for IT and Admin users
+  const { data: recentAuditLogs = [], isLoading: isAuditLogsLoading } = useQuery<any[]>({
+    queryKey: ["/api/audit-logs", "limit=10"],
+    enabled: !!currentUser && (currentUser?.role === "IT" || currentUser?.role === "ADMIN"),
+  });
+
+  // Fetch audit log statistics
+  const { data: auditStats } = useQuery<any>({
+    queryKey: ["/api/audit-logs/stats"],
+    enabled: !!currentUser && (currentUser?.role === "IT" || currentUser?.role === "ADMIN"),
+  });
+
   // Calculate statistics
   const statistics = useMemo(() => {
     const openRequests = maintenanceRequests.filter(r => r.status === "submitted" || r.status === "in-progress").length;
@@ -85,9 +98,9 @@ export default function Dashboard() {
     const currentMonth = new Date().getMonth();
     const currentYear = new Date().getFullYear();
     const monthlyTransactions = transactions.filter(t => {
-      if (t.status === "completed" && t.paidDate) {
-        const paidDate = new Date(t.paidDate);
-        return paidDate.getMonth() === currentMonth && paidDate.getFullYear() === currentYear;
+      if (t.status === "completed" && t.date) {
+        const transactionDate = new Date(t.date);
+        return transactionDate.getMonth() === currentMonth && transactionDate.getFullYear() === currentYear;
       }
       return false;
     });
@@ -135,9 +148,9 @@ export default function Dashboard() {
     return months.map((month, index) => {
       const monthNum = index + 6; // July = 6, August = 7, etc.
       const monthTransactions = transactions.filter(t => {
-        if (t.status === "completed" && t.paidDate) {
-          const paidDate = new Date(t.paidDate);
-          return paidDate.getMonth() === monthNum && paidDate.getFullYear() === currentYear;
+        if (t.status === "completed" && t.date) {
+          const transactionDate = new Date(t.date);
+          return transactionDate.getMonth() === monthNum && transactionDate.getFullYear() === currentYear;
         }
         return false;
       });
@@ -166,7 +179,7 @@ export default function Dashboard() {
     return announcements.slice(0, 3).map(announcement => ({
       id: announcement.id,
       title: announcement.title,
-      description: announcement.description,
+      description: announcement.content,
       category: announcement.category as "maintenance" | "power" | "repair" | "general",
       date: new Date(announcement.startDate).toLocaleDateString('en-US', { 
         year: 'numeric', 
@@ -340,40 +353,127 @@ export default function Dashboard() {
           </Card>
 
           {showFullDashboard && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <AlertCircle className="h-5 w-5" />
-                  Critical Alerts
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {isLoadingStats ? (
-                  <Skeleton className="h-20" />
-                ) : (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm">Delinquent Accounts</span>
-                      <Badge variant={statistics.delinquentAccounts > 0 ? "destructive" : "secondary"}>
-                        {statistics.delinquentAccounts}
-                      </Badge>
+            <>
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <AlertCircle className="h-5 w-5" />
+                    Critical Alerts
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {isLoadingStats ? (
+                    <Skeleton className="h-20" />
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">Delinquent Accounts</span>
+                        <Badge variant={statistics.delinquentAccounts > 0 ? "destructive" : "secondary"}>
+                          {statistics.delinquentAccounts}
+                        </Badge>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">Urgent Maintenance</span>
+                        <Badge variant={statistics.urgentRequests > 0 ? "destructive" : "secondary"}>
+                          {statistics.urgentRequests}
+                        </Badge>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">Expiring Leases</span>
+                        <Badge variant={statistics.expiringLeases > 3 ? "secondary" : "outline"}>
+                          {statistics.expiringLeases}
+                        </Badge>
+                      </div>
                     </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm">Urgent Maintenance</span>
-                      <Badge variant={statistics.urgentRequests > 0 ? "destructive" : "secondary"}>
-                        {statistics.urgentRequests}
-                      </Badge>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Shield className="h-5 w-5" />
+                    Audit Activity
+                  </CardTitle>
+                  <CardDescription>
+                    Recent system activity and security events
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {isAuditLogsLoading ? (
+                    <Skeleton className="h-20" />
+                  ) : (
+                    <div className="space-y-3">
+                      {auditStats && (
+                        <div className="grid grid-cols-2 gap-3 mb-4">
+                          <div className="text-center p-2 bg-muted/50 rounded-lg">
+                            <Activity className="h-4 w-4 mx-auto mb-1 text-muted-foreground" />
+                            <div className="text-2xl font-bold">
+                              {auditStats.totalActions || 0}
+                            </div>
+                            <p className="text-xs text-muted-foreground">Today's Actions</p>
+                          </div>
+                          <div className="text-center p-2 bg-muted/50 rounded-lg">
+                            <AlertTriangle className="h-4 w-4 mx-auto mb-1 text-destructive" />
+                            <div className="text-2xl font-bold text-destructive">
+                              {auditStats.failedLogins || 0}
+                            </div>
+                            <p className="text-xs text-muted-foreground">Failed Logins</p>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {recentAuditLogs.length > 0 ? (
+                        <div className="space-y-2">
+                          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                            Recent Critical Actions
+                          </p>
+                          {recentAuditLogs.slice(0, 5).map((log) => (
+                            <div
+                              key={log.id}
+                              className="flex items-center justify-between p-2 rounded-lg bg-muted/30 text-sm"
+                            >
+                              <div className="flex items-center gap-2 flex-1">
+                                <Badge 
+                                  variant={
+                                    log.action === "DELETE" ? "destructive" :
+                                    log.action === "CREATE" ? "default" :
+                                    log.action === "LOGIN_FAILED" ? "destructive" :
+                                    "secondary"
+                                  }
+                                  className="text-xs"
+                                >
+                                  {log.action}
+                                </Badge>
+                                <span className="text-xs text-muted-foreground">
+                                  {log.userName} • {log.entityType}
+                                </span>
+                              </div>
+                              <span className="text-xs text-muted-foreground">
+                                {format(new Date(log.createdAt), "HH:mm")}
+                              </span>
+                            </div>
+                          ))}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="w-full mt-2"
+                            data-testid="button-view-all-logs"
+                            onClick={() => window.location.href = "/audit-logs"}
+                          >
+                            View All Logs
+                          </Button>
+                        </div>
+                      ) : (
+                        <p className="text-center text-sm text-muted-foreground py-4">
+                          No recent audit activity
+                        </p>
+                      )}
                     </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm">Expiring Leases</span>
-                      <Badge variant={statistics.expiringLeases > 3 ? "secondary" : "outline"}>
-                        {statistics.expiringLeases}
-                      </Badge>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                  )}
+                </CardContent>
+              </Card>
+            </>
           )}
         </div>
       </div>

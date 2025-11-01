@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { MaintenanceRequestCard } from "@/components/MaintenanceRequestCard";
 import { UtilityReadingCard } from "@/components/UtilityReadingCard";
+import { FileUpload } from "@/components/FileUpload";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -42,7 +43,8 @@ import {
   Wifi,
   FileText,
   Download,
-  Clock
+  Clock,
+  Paperclip
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -50,7 +52,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertMaintenanceRequestSchema, type MaintenanceRequest, type Property, type Unit } from "@shared/schema";
+import { insertMaintenanceRequestSchema, type MaintenanceRequest, type Property, type Unit, type Document } from "@shared/schema";
 import { Skeleton } from "@/components/ui/skeleton";
 
 // Form schema
@@ -392,6 +394,26 @@ export default function Maintenance() {
                       </FormItem>
                     )}
                   />
+                  {/* Document Upload Section */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Attach Documents (Optional)</label>
+                    <p className="text-xs text-muted-foreground">
+                      Upload photos, invoices, or any relevant documents for this maintenance request
+                    </p>
+                    <FileUpload
+                      entityType="maintenance_request"
+                      entityId={`temp_${Date.now()}`} // Temporary ID until request is created
+                      category="maintenance"
+                      isPrivate={true}
+                      onUploadSuccess={() => {
+                        toast({
+                          title: "Document uploaded",
+                          description: "Document has been attached to this request",
+                        });
+                      }}
+                      maxFiles={5}
+                    />
+                  </div>
                   <div className="flex justify-end gap-2 pt-4">
                     <Button
                       type="button"
