@@ -78,6 +78,23 @@ export const insertUserSchema = createInsertSchema(users).omit({
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
+// ============= Password Reset Tokens =============
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  token: text("token").notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  used: boolean("used").default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertPasswordResetTokenSchema = createInsertSchema(passwordResetTokens).omit({ 
+  id: true,
+  createdAt: true
+});
+export type InsertPasswordResetToken = z.infer<typeof insertPasswordResetTokenSchema>;
+export type PasswordResetToken = typeof passwordResetTokens.$inferSelect;
+
 // ============= Owner Units (Many-to-Many) =============
 export const ownerUnits = pgTable("owner_units", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -175,22 +192,21 @@ export const transactions = pgTable("transactions", {
   ownerId: uuid("owner_id").references(() => owners.id),
   unitId: uuid("unit_id").references(() => units.id),
   type: text("type").notNull(), // payment, request, refund, assessment
-  category: text("category"), // dues, utilities, maintenance, penalty
-  description: text("description").notNull(),
+  category: text("category").notNull(), // rent, maintenance, utilities, fine, deposit
   amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
-  status: text("status").notNull(), // pending, completed, rejected, cancelled
+  date: date("date").notNull(),
   dueDate: date("due_date"),
-  paidDate: date("paid_date"),
-  referenceNumber: text("reference_number").unique(),
+  status: text("status").notNull(), // pending, paid, overdue, cancelled
+  paymentMethod: text("payment_method"),
+  referenceNumber: text("reference_number"),
+  description: text("description"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  paymentMethod: text("payment_method"), // cash, check, transfer, online
-  notes: text("notes"),
+  createdBy: uuid("created_by").references(() => users.id),
 });
 
 export const insertTransactionSchema = createInsertSchema(transactions).omit({ 
   id: true,
-  createdAt: true,
-  referenceNumber: true 
+  createdAt: true 
 });
 export type InsertTransaction = z.infer<typeof insertTransactionSchema>;
 export type Transaction = typeof transactions.$inferSelect;
@@ -198,21 +214,25 @@ export type Transaction = typeof transactions.$inferSelect;
 // ============= Communications =============
 export const communications = pgTable("communications", {
   id: uuid("id").defaultRandom().primaryKey(),
-  threadId: text("thread_id").notNull(),
-  senderId: uuid("sender_id").references(() => owners.id),
-  senderName: text("sender_name").notNull(),
-  senderRole: text("sender_role").notNull(), // admin, owner, tenant
-  subject: text("subject"),
+  propertyId: uuid("property_id").references(() => properties.id),
+  unitId: uuid("unit_id").references(() => units.id),
+  tenantId: uuid("tenant_id").references(() => tenants.id),
+  userId: uuid("user_id").references(() => users.id),
+  type: text("type").notNull(), // inquiry, complaint, notification, announcement
+  subject: text("subject").notNull(),
   message: text("message").notNull(),
-  category: text("category"), // inquiry, billing, bug, general
-  status: text("status"), // open, pending, resolved
+  status: text("status").notNull(), // open, in-progress, resolved, closed
+  priority: text("priority"), // low, normal, high
+  parentId: uuid("parent_id"), // For threaded conversations
   attachments: text("attachments").array(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 export const insertCommunicationSchema = createInsertSchema(communications).omit({ 
   id: true,
-  createdAt: true 
+  createdAt: true,
+  updatedAt: true
 });
 export type InsertCommunication = z.infer<typeof insertCommunicationSchema>;
 export type Communication = typeof communications.$inferSelect;
@@ -220,14 +240,19 @@ export type Communication = typeof communications.$inferSelect;
 // ============= Announcements =============
 export const announcements = pgTable("announcements", {
   id: uuid("id").defaultRandom().primaryKey(),
+  propertyId: uuid("property_id").references(() => properties.id),
   title: text("title").notNull(),
-  description: text("description").notNull(),
-  category: text("category").notNull(), // maintenance, power, repair, general
-  priority: text("priority").notNull(), // normal, urgent
+  content: text("content").notNull(),
+  category: text("category").notNull(), // general, maintenance, emergency, event
+  priority: text("priority").notNull(), // low, normal, high, urgent
+  targetAudience: text("target_audience").notNull(), // all, owners, tenants, specific units
+  targetUnits: text("target_units").array(),
   startDate: timestamp("start_date").notNull(),
   endDate: timestamp("end_date"),
+  isActive: boolean("is_active").default(true),
+  attachments: text("attachments").array(),
+  createdBy: uuid("created_by").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  createdBy: text("created_by").notNull(),
 });
 
 export const insertAnnouncementSchema = createInsertSchema(announcements).omit({ 
@@ -240,22 +265,166 @@ export type Announcement = typeof announcements.$inferSelect;
 // ============= Account Payables =============
 export const accountPayables = pgTable("account_payables", {
   id: uuid("id").defaultRandom().primaryKey(),
-  vendor: text("vendor").notNull(),
+  propertyId: uuid("property_id").notNull().references(() => properties.id),
+  category: text("category").notNull(), // utilities, maintenance, supplies, services
+  vendor: text("vendor"),
   description: text("description").notNull(),
   amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
   dueDate: date("due_date").notNull(),
-  status: text("status").notNull(), // pending, approved, paid, cancelled
-  approver: text("approver"),
-  paidDate: date("paid_date"),
+  status: text("status").notNull(), // pending, approved, paid, overdue, cancelled
   invoiceNumber: text("invoice_number"),
+  invoiceDate: date("invoice_date"),
+  paidDate: date("paid_date"),
+  paymentMethod: text("payment_method"),
+  referenceNumber: text("reference_number"),
+  approvedBy: uuid("approved_by").references(() => users.id),
+  notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  lastModified: timestamp("last_modified").defaultNow().notNull(),
+  createdBy: uuid("created_by").references(() => users.id),
 });
 
 export const insertAccountPayableSchema = createInsertSchema(accountPayables).omit({ 
   id: true,
-  createdAt: true,
-  lastModified: true
+  createdAt: true 
 });
 export type InsertAccountPayable = z.infer<typeof insertAccountPayableSchema>;
 export type AccountPayable = typeof accountPayables.$inferSelect;
+
+// ============= Reports =============
+export const reports = pgTable("reports", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  propertyId: uuid("property_id").references(() => properties.id),
+  name: text("name").notNull(),
+  type: text("type").notNull(), // financial, occupancy, maintenance, tenant, custom
+  parameters: json("parameters"), // Store report parameters
+  generatedBy: uuid("generated_by").references(() => users.id),
+  generatedAt: timestamp("generated_at").defaultNow().notNull(),
+  format: text("format"), // pdf, excel, csv
+  data: json("data"), // Stores the generated report data
+});
+
+export const insertReportSchema = createInsertSchema(reports).omit({ 
+  id: true,
+  generatedAt: true 
+});
+export type InsertReport = z.infer<typeof insertReportSchema>;
+export type Report = typeof reports.$inferSelect;
+
+// ============= Contractors =============
+export const contractors = pgTable("contractors", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  propertyId: uuid("property_id").notNull().references(() => properties.id),
+  name: text("name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone").notNull(),
+  specialty: text("specialty").notNull(), // general, plumbing, electrical, hvac, landscaping, etc.
+  license: text("license"),
+  status: text("status").notNull(), // active, inactive, blacklisted
+  rating: decimal("rating", { precision: 2, scale: 1 }),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertContractorSchema = createInsertSchema(contractors).omit({ 
+  id: true,
+  createdAt: true
+});
+export type InsertContractor = z.infer<typeof insertContractorSchema>;
+export type Contractor = typeof contractors.$inferSelect;
+
+// ============= Projects =============
+export const projects = pgTable("projects", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  propertyId: uuid("property_id").notNull().references(() => properties.id),
+  name: text("name").notNull(),
+  status: text("status").notNull(), // planned, in-progress, completed, cancelled
+  category: text("category").notNull(), // renovation, maintenance, upgrade, construction
+  contractor: text("contractor"),
+  contractorId: uuid("contractor_id").references(() => contractors.id),
+  startDate: date("start_date").notNull(),
+  endDate: date("end_date"),
+  budget: decimal("budget", { precision: 10, scale: 2 }),
+  spent: decimal("spent", { precision: 10, scale: 2 }).default("0"),
+  documents: text("documents").array(),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  createdBy: uuid("created_by").references(() => users.id),
+});
+
+export const insertProjectSchema = createInsertSchema(projects).omit({ 
+  id: true,
+  createdAt: true
+});
+export type InsertProject = z.infer<typeof insertProjectSchema>;
+export type Project = typeof projects.$inferSelect;
+
+// ============= DENR Documents (Environmental Compliance) =============
+export const denrDocuments = pgTable("denr_documents", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  propertyId: uuid("property_id").notNull().references(() => properties.id),
+  type: text("type").notNull(), // certificate, permit, clearance, report
+  name: text("name").notNull(),
+  issueDate: date("issue_date").notNull(),
+  expiryDate: date("expiry_date"),
+  status: text("status").notNull(), // valid, expired, expiring, pending
+  fileUrl: text("file_url"),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  uploadedBy: uuid("uploaded_by").references(() => users.id),
+});
+
+export const insertDenrDocumentSchema = createInsertSchema(denrDocuments).omit({ 
+  id: true,
+  createdAt: true
+});
+export type InsertDenrDocument = z.infer<typeof insertDenrDocumentSchema>;
+export type DenrDocument = typeof denrDocuments.$inferSelect;
+
+// ============= Vendors =============
+export const vendors = pgTable("vendors", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  propertyId: uuid("property_id").notNull().references(() => properties.id),
+  name: text("name").notNull(),
+  email: text("email"),
+  phone: text("phone"),
+  address: text("address"),
+  category: text("category").notNull(), // utilities, maintenance, supplies, security, cleaning, etc.
+  contactPerson: text("contact_person"),
+  status: text("status").notNull().default("active"), // active, inactive, blacklisted
+  rating: integer("rating").default(0), // 0-5 stars
+  notes: text("notes"),
+  contractStartDate: date("contract_start_date"),
+  contractEndDate: date("contract_end_date"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertVendorSchema = createInsertSchema(vendors).omit({ 
+  id: true,
+  createdAt: true
+});
+export type InsertVendor = z.infer<typeof insertVendorSchema>;
+export type Vendor = typeof vendors.$inferSelect;
+
+// ============= Settings =============
+export const settings = pgTable("settings", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id).unique(),
+  propertyId: uuid("property_id").references(() => properties.id), // Optional for property-specific settings
+  emailNotifications: boolean("email_notifications").default(true),
+  smsNotifications: boolean("sms_notifications").default(false),
+  pushNotifications: boolean("push_notifications").default(true),
+  language: text("language").default("en"),
+  timezone: text("timezone").default("America/New_York"),
+  currency: text("currency").default("USD"),
+  maintenanceAutoAssign: boolean("maintenance_auto_assign").default(false),
+  paymentReminderDays: integer("payment_reminder_days").default(3),
+  theme: text("theme").default("light"), // light, dark, auto
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertSettingsSchema = createInsertSchema(settings).omit({ 
+  id: true,
+  updatedAt: true
+});
+export type InsertSettings = z.infer<typeof insertSettingsSchema>;
+export type Settings = typeof settings.$inferSelect;

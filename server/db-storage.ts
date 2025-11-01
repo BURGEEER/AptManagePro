@@ -13,6 +13,13 @@ import {
   parkingSlots,
   accountPayables,
   users,
+  reports,
+  projects,
+  contractors,
+  denrDocuments,
+  vendors,
+  settings,
+  passwordResetTokens,
   type Property, type InsertProperty,
   type Unit, type InsertUnit,
   type Owner, type InsertOwner,
@@ -25,11 +32,19 @@ import {
   type OwnerUnit, type InsertOwnerUnit,
   type ParkingSlot, type InsertParkingSlot,
   type AccountPayable, type InsertAccountPayable,
-  type User, type InsertUser
+  type User, type InsertUser,
+  type Report, type InsertReport,
+  type Project, type InsertProject,
+  type Contractor, type InsertContractor,
+  type DenrDocument, type InsertDenrDocument,
+  type Vendor, type InsertVendor,
+  type Settings, type InsertSettings,
+  type PasswordResetToken, type InsertPasswordResetToken
 } from "@shared/schema";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, sql, or, lt } from "drizzle-orm";
 import { IStorage } from "./storage";
 import * as bcrypt from "bcryptjs";
+import crypto from "crypto";
 
 export class PgStorage implements IStorage {
   // User methods with proper authentication
@@ -76,6 +91,56 @@ export class PgStorage implements IStorage {
 
   async verifyPassword(hashedPassword: string, plainPassword: string): Promise<boolean> {
     return bcrypt.compare(plainPassword, hashedPassword);
+  }
+
+  // Password reset methods
+  async createPasswordResetToken(token: InsertPasswordResetToken): Promise<PasswordResetToken> {
+    // Hash the token before storing
+    const hashedToken = await bcrypt.hash(token.token, 10);
+    const [result] = await db.insert(passwordResetTokens).values({
+      ...token,
+      token: hashedToken
+    }).returning();
+    return result;
+  }
+
+  async getPasswordResetToken(token: string): Promise<PasswordResetToken | null> {
+    // Get all non-used, non-expired tokens and check against the hashed token
+    const tokens = await db.select()
+      .from(passwordResetTokens)
+      .where(and(
+        eq(passwordResetTokens.used, false)
+      ));
+    
+    // Check each token to find a match
+    for (const dbToken of tokens) {
+      const isMatch = await bcrypt.compare(token, dbToken.token);
+      if (isMatch) {
+        // Check if expired
+        if (new Date(dbToken.expiresAt) < new Date()) {
+          return null; // Token is expired
+        }
+        return dbToken;
+      }
+    }
+    
+    return null;
+  }
+
+  async markTokenAsUsed(tokenId: string): Promise<void> {
+    await db.update(passwordResetTokens)
+      .set({ used: true })
+      .where(eq(passwordResetTokens.id, tokenId));
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [result] = await db.select().from(users).where(eq(users.email, email));
+    return result || undefined;
+  }
+
+  async deleteExpiredTokens(): Promise<void> {
+    await db.delete(passwordResetTokens)
+      .where(lt(passwordResetTokens.expiresAt, new Date()));
   }
 
   // Properties
@@ -314,6 +379,155 @@ export class PgStorage implements IStorage {
     return db.select().from(transactions).where(eq(transactions.status, status));
   }
 
+  async getTransactionsWithFilters(filters: {
+    status?: string;
+    ownerId?: string;
+    unitId?: string;
+    paymentMethod?: string;
+    startDate?: string;
+    endDate?: string;
+    category?: string;
+    propertyId?: string;
+    ownerIds?: string[];
+    unitIds?: string[];
+    page?: number;
+    limit?: number;
+  }): Promise<{ data: Transaction[]; total: number; page: number; totalPages: number }> {
+    let query = db.select().from(transactions);
+    let countQuery = db.select({ count: sql<number>`cast(count(*) as int)` }).from(transactions);
+    
+    const conditions = [];
+    
+    if (filters.status) {
+      conditions.push(eq(transactions.status, filters.status));
+    }
+    if (filters.ownerId) {
+      conditions.push(eq(transactions.ownerId, filters.ownerId));
+    }
+    if (filters.unitId) {
+      conditions.push(eq(transactions.unitId, filters.unitId));
+    }
+    if (filters.paymentMethod) {
+      conditions.push(eq(transactions.paymentMethod, filters.paymentMethod));
+    }
+    if (filters.category) {
+      conditions.push(eq(transactions.category, filters.category));
+    }
+    if (filters.startDate) {
+      conditions.push(sql`${transactions.createdAt} >= ${filters.startDate}::date`);
+    }
+    if (filters.endDate) {
+      conditions.push(sql`${transactions.createdAt} <= ${filters.endDate}::date + interval '1 day'`);
+    }
+    if (filters.ownerIds && filters.ownerIds.length > 0) {
+      conditions.push(sql`${transactions.ownerId} = ANY(${filters.ownerIds})`);
+    }
+    if (filters.unitIds && filters.unitIds.length > 0) {
+      conditions.push(sql`${transactions.unitId} = ANY(${filters.unitIds})`);
+    }
+    
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions));
+      countQuery = countQuery.where(and(...conditions));
+    }
+    
+    const [{ count }] = await countQuery;
+    const total = count || 0;
+    
+    const page = filters.page || 1;
+    const limit = filters.limit || 20;
+    const offset = (page - 1) * limit;
+    const totalPages = Math.ceil(total / limit);
+    
+    query = query.orderBy(desc(transactions.createdAt)).limit(limit).offset(offset);
+    
+    const data = await query;
+    
+    return { data, total, page, totalPages };
+  }
+
+  async getTransactionsSummary(filters: {
+    status?: string;
+    ownerId?: string;
+    unitId?: string;
+    startDate?: string;
+    endDate?: string;
+    ownerIds?: string[];
+    unitIds?: string[];
+  }): Promise<{
+    totalTransactions: number;
+    totalAmount: number;
+    completedAmount: number;
+    pendingAmount: number;
+    completedCount: number;
+    pendingCount: number;
+    overdueCount: number;
+  }> {
+    const conditions = [];
+    
+    if (filters.ownerId) {
+      conditions.push(eq(transactions.ownerId, filters.ownerId));
+    }
+    if (filters.unitId) {
+      conditions.push(eq(transactions.unitId, filters.unitId));
+    }
+    if (filters.startDate) {
+      conditions.push(sql`${transactions.createdAt} >= ${filters.startDate}::date`);
+    }
+    if (filters.endDate) {
+      conditions.push(sql`${transactions.createdAt} <= ${filters.endDate}::date + interval '1 day'`);
+    }
+    if (filters.ownerIds && filters.ownerIds.length > 0) {
+      conditions.push(sql`${transactions.ownerId} = ANY(${filters.ownerIds})`);
+    }
+    if (filters.unitIds && filters.unitIds.length > 0) {
+      conditions.push(sql`${transactions.unitId} = ANY(${filters.unitIds})`);
+    }
+    
+    let baseQuery = db.select().from(transactions);
+    if (conditions.length > 0) {
+      baseQuery = baseQuery.where(and(...conditions));
+    }
+    
+    const allTransactions = await baseQuery;
+    const now = new Date();
+    
+    const completed = allTransactions.filter(t => t.status === 'completed');
+    const pending = allTransactions.filter(t => t.status === 'pending');
+    const overdue = allTransactions.filter(t => {
+      if (t.status === 'pending' && t.dueDate) {
+        const dueDate = new Date(t.dueDate);
+        return dueDate < now;
+      }
+      return false;
+    });
+    
+    const totalAmount = allTransactions.reduce((sum, t) => {
+      const amount = parseFloat(t.amount?.toString() || '0');
+      return sum + Math.abs(amount);
+    }, 0);
+    
+    const completedAmount = completed.reduce((sum, t) => {
+      const amount = parseFloat(t.amount?.toString() || '0');
+      return sum + Math.abs(amount);
+    }, 0);
+    
+    const pendingAmount = pending.reduce((sum, t) => {
+      const amount = parseFloat(t.amount?.toString() || '0');
+      return sum + Math.abs(amount);
+    }, 0);
+    
+    return {
+      totalTransactions: allTransactions.length,
+      totalAmount,
+      completedAmount,
+      pendingAmount,
+      completedCount: completed.length,
+      pendingCount: pending.length,
+      overdueCount: overdue.length,
+    };
+  }
+
   async updateTransaction(id: string, transaction: Partial<InsertTransaction>): Promise<Transaction | null> {
     const [result] = await db.update(transactions).set(transaction).where(eq(transactions.id, id)).returning();
     return result || null;
@@ -506,5 +720,185 @@ export class PgStorage implements IStorage {
   async deleteAccountPayable(id: string): Promise<boolean> {
     const result = await db.delete(accountPayables).where(eq(accountPayables.id, id));
     return (result.rowCount ?? 0) > 0;
+  }
+
+  // Reports
+  async createReport(report: InsertReport): Promise<Report> {
+    const [result] = await db.insert(reports).values(report).returning();
+    return result;
+  }
+
+  async getReportById(id: string): Promise<Report | null> {
+    const [result] = await db.select().from(reports).where(eq(reports.id, id));
+    return result || null;
+  }
+
+  async getReportsByProperty(propertyId: string): Promise<Report[]> {
+    return db.select()
+      .from(reports)
+      .where(eq(reports.propertyId, propertyId))
+      .orderBy(desc(reports.generatedAt));
+  }
+
+  async getAllReports(): Promise<Report[]> {
+    return db.select().from(reports).orderBy(desc(reports.generatedAt));
+  }
+
+  async getReportsByType(type: string): Promise<Report[]> {
+    return db.select()
+      .from(reports)
+      .where(eq(reports.type, type))
+      .orderBy(desc(reports.generatedAt));
+  }
+
+  async updateReport(id: string, report: Partial<InsertReport>): Promise<Report | null> {
+    const [result] = await db.update(reports).set(report).where(eq(reports.id, id)).returning();
+    return result || null;
+  }
+
+  async deleteReport(id: string): Promise<boolean> {
+    const result = await db.delete(reports).where(eq(reports.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  // Projects
+  async createProject(project: InsertProject): Promise<Project> {
+    const [result] = await db.insert(projects).values(project).returning();
+    return result;
+  }
+
+  async getProjectById(id: string): Promise<Project | null> {
+    const [result] = await db.select().from(projects).where(eq(projects.id, id));
+    return result || null;
+  }
+
+  async getProjectsByPropertyId(propertyId: string): Promise<Project[]> {
+    return db.select()
+      .from(projects)
+      .where(eq(projects.propertyId, propertyId))
+      .orderBy(desc(projects.createdAt));
+  }
+
+  async updateProject(id: string, project: Partial<InsertProject>): Promise<Project | null> {
+    const [result] = await db.update(projects).set(project).where(eq(projects.id, id)).returning();
+    return result || null;
+  }
+
+  async deleteProject(id: string): Promise<boolean> {
+    const result = await db.delete(projects).where(eq(projects.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  // Contractors
+  async createContractor(contractor: InsertContractor): Promise<Contractor> {
+    const [result] = await db.insert(contractors).values(contractor).returning();
+    return result;
+  }
+
+  async getContractorById(id: string): Promise<Contractor | null> {
+    const [result] = await db.select().from(contractors).where(eq(contractors.id, id));
+    return result || null;
+  }
+
+  async getContractorsByPropertyId(propertyId: string): Promise<Contractor[]> {
+    return db.select()
+      .from(contractors)
+      .where(eq(contractors.propertyId, propertyId))
+      .orderBy(desc(contractors.createdAt));
+  }
+
+  async updateContractor(id: string, contractor: Partial<InsertContractor>): Promise<Contractor | null> {
+    const [result] = await db.update(contractors).set(contractor).where(eq(contractors.id, id)).returning();
+    return result || null;
+  }
+
+  async deleteContractor(id: string): Promise<boolean> {
+    const result = await db.delete(contractors).where(eq(contractors.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  // DENR Documents
+  async createDenrDocument(document: InsertDenrDocument): Promise<DenrDocument> {
+    const [result] = await db.insert(denrDocuments).values(document).returning();
+    return result;
+  }
+
+  async getDenrDocumentById(id: string): Promise<DenrDocument | null> {
+    const [result] = await db.select().from(denrDocuments).where(eq(denrDocuments.id, id));
+    return result || null;
+  }
+
+  async getDenrDocumentsByPropertyId(propertyId: string): Promise<DenrDocument[]> {
+    return db.select()
+      .from(denrDocuments)
+      .where(eq(denrDocuments.propertyId, propertyId))
+      .orderBy(desc(denrDocuments.createdAt));
+  }
+
+  async updateDenrDocument(id: string, document: Partial<InsertDenrDocument>): Promise<DenrDocument | null> {
+    const [result] = await db.update(denrDocuments).set(document).where(eq(denrDocuments.id, id)).returning();
+    return result || null;
+  }
+
+  async deleteDenrDocument(id: string): Promise<boolean> {
+    const result = await db.delete(denrDocuments).where(eq(denrDocuments.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  // Vendors
+  async createVendor(vendor: InsertVendor): Promise<Vendor> {
+    const [result] = await db.insert(vendors).values(vendor).returning();
+    return result;
+  }
+
+  async getVendorById(id: string): Promise<Vendor | null> {
+    const [result] = await db.select().from(vendors).where(eq(vendors.id, id));
+    return result || null;
+  }
+
+  async getVendorsByPropertyId(propertyId: string): Promise<Vendor[]> {
+    return db.select()
+      .from(vendors)
+      .where(eq(vendors.propertyId, propertyId))
+      .orderBy(desc(vendors.createdAt));
+  }
+
+  async updateVendor(id: string, vendor: Partial<InsertVendor>): Promise<Vendor | null> {
+    const [result] = await db.update(vendors).set(vendor).where(eq(vendors.id, id)).returning();
+    return result || null;
+  }
+
+  async deleteVendor(id: string): Promise<boolean> {
+    const result = await db.delete(vendors).where(eq(vendors.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  // Settings
+  async createSettings(settings: InsertSettings): Promise<Settings> {
+    const [result] = await db.insert(settings).values(settings).returning();
+    return result;
+  }
+
+  async getSettingsByUserId(userId: string): Promise<Settings | null> {
+    const [result] = await db.select().from(settings).where(eq(settings.userId, userId));
+    return result || null;
+  }
+
+  async updateSettings(id: string, settingsData: Partial<InsertSettings>): Promise<Settings | null> {
+    const [result] = await db.update(settings)
+      .set({ ...settingsData, updatedAt: new Date() })
+      .where(eq(settings.id, id))
+      .returning();
+    return result || null;
+  }
+
+  async upsertSettings(userId: string, settingsData: Partial<InsertSettings>): Promise<Settings> {
+    const existing = await this.getSettingsByUserId(userId);
+    if (existing) {
+      const updated = await this.updateSettings(existing.id, settingsData);
+      return updated!;
+    } else {
+      return await this.createSettings({ ...settingsData, userId } as InsertSettings);
+    }
   }
 }

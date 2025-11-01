@@ -19,7 +19,10 @@ import Transactions from "@/pages/Transactions";
 import Reports from "@/pages/Reports";
 import Documentation from "@/pages/Documentation";
 import Users from "@/pages/Users";
+import Vendors from "@/pages/Vendors";
+import Settings from "@/pages/Settings";
 import Login from "@/pages/Login";
+import PasswordReset from "@/pages/PasswordReset";
 import NotFound from "@/pages/not-found";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
@@ -121,12 +124,14 @@ function Router() {
       <Route path="/masterlist" component={Masterlist} />
       <Route path="/properties" component={Properties} />
       <Route path="/tenants" component={Tenants} />
+      <Route path="/vendors" component={Vendors} />
       <Route path="/maintenance" component={Maintenance} />
       <Route path="/communications" component={Communications} />
       <Route path="/financials" component={Financials} />
       <Route path="/transactions" component={Transactions} />
       <Route path="/reports" component={Reports} />
       <Route path="/documentation" component={Documentation} />
+      <Route path="/settings" component={Settings} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -141,6 +146,8 @@ function App() {
         <TooltipProvider>
           {location === '/login' ? (
             <Login />
+          ) : location === '/reset-password' ? (
+            <PasswordReset />
           ) : (
             <AuthenticatedLayout />
           )}
